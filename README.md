@@ -1,5 +1,8 @@
 # Linux-Persistence-Parser
 
+Goal:
+Create an automated bash script that is placed onto a linux host, in which it pulls every known way for file persistence and places all findings within a directory.
+
 
 ```
 /etc/crontab
