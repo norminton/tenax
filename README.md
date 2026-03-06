@@ -1,1 +1,61 @@
 # Linux-Persistence-Parser
+
+
+
+/etc/crontab — System-wide scheduled cron jobs
+/etc/cron.d/ — Additional cron job definitions
+/etc/cron.hourly/ — Hourly scheduled scripts
+/etc/cron.daily/ — Daily scheduled scripts
+/etc/cron.weekly/ — Weekly scheduled scripts
+/etc/cron.monthly/ — Monthly scheduled scripts
+/var/spool/cron/ — User-specific cron job storage
+/var/spool/cron/crontabs/ — Per-user cron job files
+/etc/systemd/system/ — Custom systemd service definitions
+/usr/lib/systemd/system/ — Default systemd service files
+/lib/systemd/system/ — System service unit files
+/etc/init.d/ — Legacy service initialization scripts
+/etc/rc.local — Commands executed during system boot
+/etc/profile — System-wide login shell configuration
+/etc/profile.d/ — Additional login shell scripts
+/etc/bash.bashrc — System-wide interactive bash settings
+/etc/environment — Global environment variable definitions
+~/.bashrc — User interactive shell configuration
+~/.bash_profile — User login shell configuration
+~/.profile — User login environment settings
+~/.zshrc — User zsh shell configuration
+~/.ssh/authorized_keys — Authorized SSH login keys
+/root/.ssh/authorized_keys — Root SSH authorized keys
+/etc/ssh/sshd_config — SSH server configuration settings
+/etc/sudoers — Defines sudo privilege rules
+/etc/sudoers.d/ — Additional sudo privilege files
+/etc/passwd — Local user account definitions
+/etc/shadow — Password hash storage
+/etc/ld.so.preload — Force loaded shared libraries
+/etc/ld.so.conf — Shared library path configuration
+/etc/ld.so.conf.d/ — Additional library path configs
+/etc/modules — Kernel modules loaded at boot
+/etc/modules-load.d/ — Additional module load configs
+/etc/modprobe.d/ — Kernel module configuration files
+/etc/network/if-up.d/ — Scripts run after interface up
+/etc/network/if-down.d/ — Scripts run after interface down
+/etc/network/if-pre-up.d/ — Scripts before interface startup
+/etc/network/if-post-down.d/ — Scripts after interface shutdown
+/etc/rc0.d/ — Runlevel 0 shutdown scripts
+/etc/rc1.d/ — Runlevel 1 single-user scripts
+/etc/rc2.d/ — Runlevel 2 multi-user scripts
+/etc/rc3.d/ — Runlevel 3 multi-user scripts
+/etc/rc4.d/ — Runlevel 4 multi-user scripts
+/etc/rc5.d/ — Runlevel 5 graphical startup scripts
+/etc/rc6.d/ — Runlevel 6 reboot scripts
+/usr/local/bin/ — User-installed executable programs
+/usr/local/sbin/ — User-installed administrative executables
+/opt/ — Optional application installation directory
+/var/tmp/ — Temporary files preserved across reboot
+/tmp/ — Temporary world-writable file directory
+/dev/shm/ — In-memory shared temporary filesystem
+/var/spool/at/ — Scheduled at-job task storage
+/var/spool/anacron/ — Anacron scheduled task state
+/etc/logrotate.d/ — Log rotation configuration scripts
+/boot/ — Bootloader and kernel files
+/var/lib/systemd/ — Systemd runtime and service state
+/home/*/.config/autostart/ — User graphical autostart programs
