@@ -1,7 +1,66 @@
 # Linux-Persistence-Parser
 
 
-
+```
+/etc/crontab
+/etc/cron.d/
+/etc/cron.hourly/
+/etc/cron.daily/
+/etc/cron.weekly/
+/etc/cron.monthly/
+/var/spool/cron/
+/var/spool/cron/crontabs/
+/etc/systemd/system/
+/usr/lib/systemd/system/
+/lib/systemd/system/
+/etc/init.d/
+/etc/rc.local
+/etc/profile
+/etc/profile.d/
+/etc/bash.bashrc
+/etc/environment
+~/.bashrc
+~/.bash_profile
+~/.profile
+~/.zshrc
+~/.ssh/authorized_keys
+/root/.ssh/authorized_keys
+/etc/ssh/sshd_config
+/etc/sudoers
+/etc/sudoers.d/
+/etc/passwd
+/etc/shadow
+/etc/ld.so.preload
+/etc/ld.so.conf
+/etc/ld.so.conf.d/
+/etc/modules
+/etc/modules-load.d/
+/etc/modprobe.d/
+/etc/network/if-up.d/
+/etc/network/if-down.d/
+/etc/network/if-pre-up.d/
+/etc/network/if-post-down.d/
+/etc/rc0.d/
+/etc/rc1.d/
+/etc/rc2.d/
+/etc/rc3.d/
+/etc/rc4.d/
+/etc/rc5.d/
+/etc/rc6.d/
+/usr/local/bin/
+/usr/local/sbin/
+/opt/
+/var/tmp/
+/tmp/
+/dev/shm/
+/var/spool/at/
+/var/spool/anacron/
+/etc/logrotate.d/
+/boot/
+/var/lib/systemd/
+/home/*/.config/autostart/
+```
+```
 /etc/crontab — System-wide scheduled cron jobs
 /etc/cron.d/ — Additional cron job definitions
 /etc/cron.hourly/ — Hourly scheduled scripts
@@ -59,3 +118,19 @@
 /boot/ — Bootloader and kernel files
 /var/lib/systemd/ — Systemd runtime and service state
 /home/*/.config/autostart/ — User graphical autostart programs
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
