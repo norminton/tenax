@@ -1,1 +1,21 @@
-I plan on making an application through python. The purpose of this application is to download onto a comprimised Linux box, and search for mechanisms of persistence. I want there to be two modes to start. One mode is going to search throughout EVERY area for persistence, and produce the results that have the highest chance to be persistence. Esentially it does the analysis for you. The second mode will grab all of the areas to analyse for the forensics analysts, to make collection easier and more efficient. The plan is to build this application within GitHub.
+## Model
+
+User goes to your GitHub repository
+User clones or downloads it
+User installs dependencies
+User runs your Python CLI tool on the Linux host
+
+Tool outputs:
+analysis mode: likely persistence findings, prioritized
+collection mode: persistence-relevant artifacts for human review
+
+So the pieces you need are:
+Python source code
+CLI entrypoint
+README.md
+requirements.txt or pyproject.toml
+.gitignore
+optional sample config
+optional tests
+
+
