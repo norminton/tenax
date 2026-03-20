@@ -1,20 +1,19 @@
-from tenax.checks.cron import analyze_cron_locations
-from tenax.checks.systemd import analyze_systemd_locations
+from tenax.checks.cron import collect_cron_locations
+from tenax.checks.shell_profiles import collect_shell_profile_locations
+from tenax.checks.systemd import collect_systemd_locations
 from tenax.reporter import output_results
 
 
-def run_analysis(output_path=None, output_format="text", top=20) -> None:
-    findings = []
+def run_collection(output_path=None, output_format="text", hash_files=False) -> None:
+    artifacts = []
 
-    findings.extend(analyze_cron_locations())
-    findings.extend(analyze_systemd_locations())
-
-    findings.sort(key=lambda item: item.get("score", 0), reverse=True)
-    findings = findings[:top]
+    artifacts.extend(collect_cron_locations(hash_files=hash_files))
+    artifacts.extend(collect_systemd_locations(hash_files=hash_files))
+    artifacts.extend(collect_shell_profile_locations(hash_files=hash_files))
 
     output_results(
-        mode="analyze",
-        results=findings,
+        mode="collect",
+        results=artifacts,
         output_format=output_format,
         output_path=output_path,
     )

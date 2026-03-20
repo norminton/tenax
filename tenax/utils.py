@@ -1,5 +1,4 @@
 import hashlib
-import os
 import pwd
 import stat
 from pathlib import Path
@@ -33,5 +32,12 @@ def get_file_permissions(path: Path) -> str:
 def path_exists(path: Path) -> bool:
     try:
         return path.exists()
+    except Exception:
+        return False
+
+
+def is_file_safe(path: Path) -> bool:
+    try:
+        return path.is_file()
     except Exception:
         return False
