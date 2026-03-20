@@ -1,9 +1,21 @@
 from tenax.checks.cron import analyze_cron_locations
+from tenax.checks.rc_init import analyze_rc_init_locations
 from tenax.checks.shell_profiles import analyze_shell_profile_locations
 from tenax.checks.ssh import analyze_ssh_locations
 from tenax.checks.sudoers import analyze_sudoers_locations
 from tenax.checks.systemd import analyze_systemd_locations
 from tenax.reporter import output_results
+
+
+def _tag_results(source: str, results: list[dict]) -> list[dict]:
+    tagged = []
+
+    for item in results:
+        enriched = dict(item)
+        enriched["source"] = source
+        tagged.append(enriched)
+
+    return tagged
 
 
 def run_analysis(output_path=None, output_format="text", top=20) -> None:
@@ -15,6 +27,7 @@ def run_analysis(output_path=None, output_format="text", top=20) -> None:
         "shell_profiles": analyze_shell_profile_locations(),
         "ssh": analyze_ssh_locations(),
         "sudoers": analyze_sudoers_locations(),
+        "rc_init": analyze_rc_init_locations(),
     }
 
     print("\n=== MODULE SUMMARY ===")
@@ -22,8 +35,8 @@ def run_analysis(output_path=None, output_format="text", top=20) -> None:
         print(f"{module}: {len(results)} findings")
     print("")
 
-    for results in module_results.values():
-        findings.extend(results)
+    for module, results in module_results.items():
+        findings.extend(_tag_results(module, results))
 
     findings.sort(key=lambda item: item.get("score", 0), reverse=True)
     findings = findings[:top]
