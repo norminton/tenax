@@ -107,11 +107,23 @@ def _analyze_sudoers_file(path: Path) -> list[dict]:
 
     try:
         content = path.read_text(encoding="utf-8", errors="ignore")
-    except (PermissionError, OSError):
+    except PermissionError:
+        findings.append(
+            {
+                "path": str(path),
+                "score": 0,
+                "severity": "INFO",
+                "reason": "File exists but could not be read due to permissions",
+                "preview": "<unreadable due to permissions>",
+            }
+        )
+        return findings
+    except OSError:
         return findings
 
     score = 0
     reasons = []
+    preview_line = None
 
     lines = content.splitlines()
 
@@ -123,6 +135,9 @@ def _analyze_sudoers_file(path: Path) -> list[dict]:
 
         for keyword in SUSPICIOUS_KEYWORDS:
             if keyword in line:
+                if preview_line is None:
+                    preview_line = line
+
                 if keyword == "NOPASSWD":
                     score += 35
                     reasons.append("Contains NOPASSWD rule")
@@ -138,14 +153,20 @@ def _analyze_sudoers_file(path: Path) -> list[dict]:
 
         for binary in SHELL_ESCAPE_BINARIES:
             if f"/{binary}" in line or f" {binary}" in line:
+                if preview_line is None:
+                    preview_line = line
                 score += 15
                 reasons.append(f"Permits possible shell-escape binary: {binary}")
 
         if "*" in line and "ALL" not in line:
+            if preview_line is None:
+                preview_line = line
             score += 10
             reasons.append("Contains wildcard command allowance")
 
         if "!" in line and "/bin/sh" in line:
+            if preview_line is None:
+                preview_line = line
             score += 10
             reasons.append("Attempts selective shell restriction")
 
@@ -165,6 +186,7 @@ def _analyze_sudoers_file(path: Path) -> list[dict]:
                 "score": score,
                 "severity": _severity_from_score(score),
                 "reason": "; ".join(_dedupe(reasons)),
+                "preview": preview_line,
             }
         )
 

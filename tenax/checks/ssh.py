@@ -85,26 +85,31 @@ def _analyze_ssh_file(path: Path) -> list[dict]:
 
     score = 0
     reasons = []
+    preview_line = None
 
-    # 🔥 Authorized keys checks
     if path.name == "authorized_keys":
-        for keyword in SUSPICIOUS_KEYWORDS:
-            if keyword in content:
-                score += 40
-                reasons.append(f"Suspicious SSH option: {keyword}")
-
-        # Very long key lines (possible embedded payload)
         for line in content.splitlines():
-            if len(line) > 500:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            for keyword in SUSPICIOUS_KEYWORDS:
+                if keyword in stripped:
+                    if preview_line is None:
+                        preview_line = stripped
+                    score += 40
+                    reasons.append(f"Suspicious SSH option: {keyword}")
+
+            if len(stripped) > 500:
+                if preview_line is None:
+                    preview_line = stripped[:180] + "..."
                 score += 20
                 reasons.append("Unusually long SSH key line")
 
-    # 🔥 Hidden files
     if path.name.startswith("."):
         score += 10
         reasons.append("Hidden file in .ssh directory")
 
-    # 🔥 Bad permissions (SSH is strict)
     perms = get_file_permissions(path)
     if "w" in perms[5:] or "w" in perms[8:]:
         score += 20
@@ -117,6 +122,7 @@ def _analyze_ssh_file(path: Path) -> list[dict]:
                 "score": score,
                 "severity": _severity_from_score(score),
                 "reason": "; ".join(reasons),
+                "preview": preview_line,
             }
         )
 

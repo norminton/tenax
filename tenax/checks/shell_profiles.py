@@ -25,7 +25,6 @@ USER_PROFILE_FILENAMES = [
     ".zprofile",
 ]
 
-
 SUSPICIOUS_KEYWORDS = [
     "curl",
     "wget",
@@ -54,7 +53,7 @@ def analyze_shell_profile_locations() -> list[dict]:
 
         if is_file_safe(profile_path):
             findings.extend(_analyze_profile_file(profile_path))
-        elif profile_path.is_dir():
+        elif _is_dir_safe(profile_path):
             for child in _safe_iterdir(profile_path):
                 if is_file_safe(child):
                     findings.extend(_analyze_profile_file(child))
@@ -86,7 +85,7 @@ def collect_shell_profile_locations(hash_files: bool = False) -> list[dict]:
             }
         )
 
-        if exists and profile_path.is_dir():
+        if exists and _is_dir_safe(profile_path):
             for child in _safe_iterdir(profile_path):
                 child_exists = path_exists(child)
                 child_is_file = is_file_safe(child)
@@ -127,26 +126,52 @@ def _analyze_profile_file(path: Path) -> list[dict]:
 
     try:
         content = path.read_text(encoding="utf-8", errors="ignore")
-    except (PermissionError, OSError):
+    except PermissionError:
+        findings.append(
+            {
+                "path": str(path),
+                "score": 0,
+                "severity": "INFO",
+                "reason": "File exists but could not be read due to permissions",
+                "preview": "<unreadable due to permissions>",
+            }
+        )
+        return findings
+    except OSError:
         return findings
 
     score = 0
     reasons = []
+    preview_line = None
 
-    for keyword in SUSPICIOUS_KEYWORDS:
-        if keyword in content:
-            score += 20
-            reasons.append(f"Contains suspicious keyword: {keyword}")
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        for keyword in SUSPICIOUS_KEYWORDS:
+            if keyword in stripped:
+                if preview_line is None:
+                    preview_line = stripped
+                score += 20
+                reasons.append(f"Contains suspicious keyword: {keyword}")
 
     if "export LD_PRELOAD=" in content or "LD_PRELOAD=" in content:
+        if preview_line is None:
+            preview_line = _first_matching_line(content, "LD_PRELOAD=")
         score += 40
         reasons.append("Sets LD_PRELOAD in startup file")
 
     if "alias sudo=" in content or "function sudo()" in content:
+        if preview_line is None:
+            preview_line = _first_matching_line(content, "alias sudo=") or _first_matching_line(content, "function sudo()")
         score += 30
         reasons.append("Overrides sudo behavior")
 
     if "PROMPT_COMMAND=" in content:
+        if preview_line is None:
+            preview_line = _first_matching_line(content, "PROMPT_COMMAND=")
         score += 15
         reasons.append("Uses PROMPT_COMMAND in startup file")
 
@@ -155,6 +180,8 @@ def _analyze_profile_file(path: Path) -> list[dict]:
         reasons.append("User hidden startup file")
 
     if _contains_network_execution_chain(content):
+        if preview_line is None:
+            preview_line = _first_network_exec_line(content)
         score += 40
         reasons.append("Contains likely download-and-execute chain")
 
@@ -164,7 +191,8 @@ def _analyze_profile_file(path: Path) -> list[dict]:
                 "path": str(path),
                 "score": score,
                 "severity": _severity_from_score(score),
-                "reason": "; ".join(reasons),
+                "reason": "; ".join(_dedupe(reasons)),
+                "preview": preview_line,
             }
         )
 
@@ -179,6 +207,27 @@ def _contains_network_execution_chain(content: str) -> bool:
     return any(n in lowered for n in network_terms) and any(e in lowered for e in exec_terms)
 
 
+def _first_matching_line(content: str, needle: str) -> str | None:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and needle in stripped:
+            return stripped
+    return None
+
+
+def _first_network_exec_line(content: str) -> str | None:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        lowered = stripped.lower()
+        if ("curl" in lowered or "wget" in lowered) and (
+            "bash" in lowered or "sh" in lowered or "source" in lowered or "python" in lowered or "perl" in lowered
+        ):
+            return stripped
+    return None
+
+
 def _get_home_directories() -> list[Path]:
     homes = []
 
@@ -187,18 +236,44 @@ def _get_home_directories() -> list[Path]:
         if not path_exists(base):
             continue
 
-        if base == Path("/root"):
+        if str(base) == "/root":
             homes.append(base)
             continue
 
         try:
             for child in base.iterdir():
-                if child.is_dir():
+                if _is_dir_safe(child):
                     homes.append(child)
         except (PermissionError, OSError):
             continue
 
     return homes
+
+
+def _safe_iterdir(path: Path) -> list[Path]:
+    try:
+        return list(path.iterdir())
+    except (PermissionError, OSError):
+        return []
+
+
+def _is_dir_safe(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except (PermissionError, OSError):
+        return False
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    ordered = []
+
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+
+    return ordered
 
 
 def _severity_from_score(score: int) -> str:
@@ -209,10 +284,3 @@ def _severity_from_score(score: int) -> str:
     if score >= 20:
         return "LOW"
     return "INFO"
-
-
-def _safe_iterdir(path: Path) -> list[Path]:
-    try:
-        return list(path.iterdir())
-    except (PermissionError, OSError):
-        return []

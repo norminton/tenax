@@ -97,6 +97,7 @@ def _analyze_ld_file(path: Path) -> list[dict]:
                 "score": 0,
                 "severity": "INFO",
                 "reason": "File exists but could not be read due to permissions",
+                "preview": "<unreadable due to permissions>",
             }
         )
         return findings
@@ -105,6 +106,7 @@ def _analyze_ld_file(path: Path) -> list[dict]:
 
     score = 0
     reasons = []
+    preview_line = None
 
     for line in content.splitlines():
         stripped = line.strip()
@@ -114,19 +116,27 @@ def _analyze_ld_file(path: Path) -> list[dict]:
 
         for keyword in SUSPICIOUS_KEYWORDS:
             if keyword in stripped:
+                if preview_line is None:
+                    preview_line = stripped
                 score += 10
                 reasons.append(f"Contains loader-related keyword: {keyword}")
 
         if ".so" in stripped:
+            if preview_line is None:
+                preview_line = stripped
             score += 20
             reasons.append("References shared object library")
 
         for bad_path in SUSPICIOUS_LIBRARY_PATHS:
             if bad_path in stripped:
+                if preview_line is None:
+                    preview_line = stripped
                 score += 40
                 reasons.append(f"References library in suspicious path: {bad_path}")
 
         if stripped.startswith("include "):
+            if preview_line is None:
+                preview_line = stripped
             score += 5
             reasons.append("Uses include directive in loader config")
 
@@ -146,6 +156,7 @@ def _analyze_ld_file(path: Path) -> list[dict]:
                 "score": score,
                 "severity": _severity_from_score(score),
                 "reason": "; ".join(_dedupe(reasons)),
+                "preview": preview_line,
             }
         )
 

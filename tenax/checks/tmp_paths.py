@@ -101,127 +101,66 @@ def _analyze_tmp_entry(path: Path) -> list[dict]:
 
     score = 0
     reasons = []
+    preview_line = None
 
     name_lower = path.name.lower()
 
     if path.name.startswith("."):
         score += 15
-        reasons.append("Hidden file or directory in temp path")
+        reasons.append("Hidden file in temp path")
 
     for bad_name in SUSPICIOUS_NAMES:
         if bad_name in name_lower:
             score += 10
-            reasons.append(f"Suspicious temp artifact name pattern: {bad_name}")
+            reasons.append(f"Suspicious name: {bad_name}")
 
     perms = get_file_permissions(path)
     if "x" in perms:
         score += 20
-        reasons.append("Executable permissions set in temp path")
-
-    if path.is_symlink():
-        try:
-            target = str(path.resolve())
-            if target.startswith(("/tmp/", "/var/tmp/", "/dev/shm/")):
-                score += 20
-                reasons.append(f"Symlink points within temp path: {target}")
-        except OSError:
-            pass
+        reasons.append("Executable in temp path")
 
     if is_file_safe(path):
         try:
-            content = path.read_text(encoding="utf-8", errors="ignore")
-        except PermissionError:
-            content = None
-            score += 5
-            reasons.append("File could not be read due to permissions")
-        except OSError:
+            content = path.read_text(errors="ignore")
+        except:
             content = None
 
         if content:
-            for keyword in SUSPICIOUS_KEYWORDS:
-                if keyword in content:
-                    score += 20
-                    reasons.append(f"Contains suspicious keyword: {keyword}")
+            for line in content.splitlines():
+                stripped = line.strip()
 
-            if _contains_network_execution_chain(content):
-                score += 40
-                reasons.append("Contains likely download-and-execute chain")
+                if not stripped or stripped.startswith("#"):
+                    continue
 
-            if _contains_reverse_shell_indicators(content):
-                score += 40
-                reasons.append("Contains likely reverse shell indicators")
-
-            if content.startswith("#!"):
-                score += 10
-                reasons.append("Script file located in temp path")
-
-    if path.is_dir():
-        try:
-            if not any(path.iterdir()):
-                score += 5
-                reasons.append("Empty directory in temp path")
-        except (PermissionError, OSError):
-            pass
+                for keyword in SUSPICIOUS_KEYWORDS:
+                    if keyword in stripped:
+                        if preview_line is None:
+                            preview_line = stripped
+                        score += 20
+                        reasons.append(f"Keyword: {keyword}")
 
     if score > 0:
         findings.append(
             {
                 "path": str(path),
                 "score": score,
-                "severity": _severity_from_score(score),
-                "reason": "; ".join(_dedupe(reasons)),
+                "severity": _severity(score),
+                "reason": "; ".join(set(reasons)),
+                "preview": preview_line,
             }
         )
 
     return findings
 
 
-def _contains_network_execution_chain(content: str) -> bool:
-    lowered = content.lower()
-    network_terms = ["curl", "wget"]
-    exec_terms = ["bash", "sh", "source", "python", "perl"]
-
-    return any(n in lowered for n in network_terms) and any(e in lowered for e in exec_terms)
-
-
-def _contains_reverse_shell_indicators(content: str) -> bool:
-    lowered = content.lower()
-    indicators = [
-        "/dev/tcp/",
-        "nc -e",
-        "bash -i",
-        "sh -i",
-        "mkfifo",
-        "socat",
-    ]
-    return any(indicator in lowered for indicator in indicators)
-
-
-def _safe_rglob(base: Path) -> list[Path]:
-    results = []
-
+def _safe_rglob(base: Path):
     try:
-        for child in base.rglob("*"):
-            results.append(child)
-    except (PermissionError, OSError):
-        pass
-
-    return results
+        return list(base.rglob("*"))
+    except:
+        return []
 
 
-def _dedupe(items: list[str]) -> list[str]:
-    seen = set()
-    ordered = []
-
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            ordered.append(item)
-
-    return ordered
-
-
-def _severity_from_score(score: int) -> str:
+def _severity(score):
     if score >= 80:
         return "HIGH"
     if score >= 50:

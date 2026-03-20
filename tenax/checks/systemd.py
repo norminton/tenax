@@ -93,6 +93,7 @@ def _analyze_unit_file(path: Path) -> list[dict]:
 
     score = 0
     reasons = []
+    preview_line = None
 
     name_lower = path.name.lower()
 
@@ -101,10 +102,15 @@ def _analyze_unit_file(path: Path) -> list[dict]:
             score += 10
             reasons.append(f"Suspicious service name pattern: {bad_name}")
 
+    exec_line = _extract_execstart_line(content)
+    exec_path = _extract_execstart(content)
+
     for keyword in SUSPICIOUS_KEYWORDS:
         if keyword in content:
             if keyword == "ExecStart=":
                 continue
+            if preview_line is None:
+                preview_line = exec_line if exec_line else keyword
             score += 20
             reasons.append(f"Contains suspicious keyword: {keyword}")
 
@@ -112,8 +118,10 @@ def _analyze_unit_file(path: Path) -> list[dict]:
         score += 10
         reasons.append("Missing ExecStart directive")
 
-    exec_path = _extract_execstart(content)
     if exec_path:
+        if preview_line is None and exec_line:
+            preview_line = exec_line
+
         if exec_path.startswith(("/tmp/", "/var/tmp/", "/dev/shm/")):
             score += 40
             reasons.append(f"ExecStart launches from suspicious path: {exec_path}")
@@ -133,6 +141,7 @@ def _analyze_unit_file(path: Path) -> list[dict]:
                 "score": score,
                 "severity": _severity_from_score(score),
                 "reason": "; ".join(reasons),
+                "preview": preview_line,
             }
         )
 
@@ -144,6 +153,14 @@ def _extract_execstart(content: str) -> str | None:
         stripped = line.strip()
         if stripped.startswith("ExecStart="):
             return stripped.split("=", 1)[1].strip()
+    return None
+
+
+def _extract_execstart_line(content: str) -> str | None:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("ExecStart="):
+            return stripped
     return None
 
 
