@@ -1,4 +1,6 @@
+from tenax.checks.autostart_hooks import analyze_autostart_hook_locations
 from tenax.checks.cron import analyze_cron_locations
+from tenax.checks.ld_preload import analyze_ld_preload_locations
 from tenax.checks.rc_init import analyze_rc_init_locations
 from tenax.checks.shell_profiles import analyze_shell_profile_locations
 from tenax.checks.ssh import analyze_ssh_locations
@@ -30,6 +32,8 @@ def run_analysis(output_path=None, output_format="text", top=20) -> None:
         "sudoers": analyze_sudoers_locations(),
         "rc_init": analyze_rc_init_locations(),
         "tmp_paths": analyze_tmp_paths(),
+        "ld_preload": analyze_ld_preload_locations(),
+        "autostart_hooks": analyze_autostart_hook_locations(),
     }
 
     print("\n=== MODULE SUMMARY ===")
