@@ -35,6 +35,7 @@ def render_text(mode: str, results: list[dict[str, Any]]) -> str:
 
     for index, item in enumerate(results, start=1):
         source = item.get("source", "unknown").replace("_", " ").upper()
+
         lines.append("=" * 70)
         lines.append(f"[{index}] ## {source} ##")
         lines.append(f"Path: {item.get('path', 'N/A')}")

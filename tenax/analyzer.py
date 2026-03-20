@@ -4,6 +4,7 @@ from tenax.checks.shell_profiles import analyze_shell_profile_locations
 from tenax.checks.ssh import analyze_ssh_locations
 from tenax.checks.sudoers import analyze_sudoers_locations
 from tenax.checks.systemd import analyze_systemd_locations
+from tenax.checks.tmp_paths import analyze_tmp_paths
 from tenax.reporter import output_results
 
 
@@ -28,6 +29,7 @@ def run_analysis(output_path=None, output_format="text", top=20) -> None:
         "ssh": analyze_ssh_locations(),
         "sudoers": analyze_sudoers_locations(),
         "rc_init": analyze_rc_init_locations(),
+        "tmp_paths": analyze_tmp_paths(),
     }
 
     print("\n=== MODULE SUMMARY ===")
