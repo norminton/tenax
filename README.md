@@ -1,7 +1,50 @@
-# Linux-Persistence-Parser
+# Linux Persist Hunter
 
-Goal:
-Create an automated bash script that is placed onto a linux host, in which it pulls every known way for file persistence and places all findings within a directory.
+A Python command-line tool for identifying and collecting Linux persistence artifacts during incident response and forensic triage.
+
+## Features
+
+- Analyze common Linux persistence mechanisms
+- Score likely persistence findings
+- Collect persistence-related artifacts for analyst review
+- Export results in terminal, JSON, or CSV format
+
+## Modes
+
+### Analyze
+Runs all supported checks and prioritizes findings based on suspicion.
+
+### Collect
+Enumerates and optionally copies persistence-relevant files for forensic review.
+
+## Supported Areas
+
+- cron
+- systemd
+- init.d
+- rc.local
+- shell startup files
+- SSH authorized_keys
+- sudoers
+- tmp execution paths
+- profile scripts
+- LD_PRELOAD-related artifacts
+
+## Installation
+
+```bash
+git clone https://github.com/YOURNAME/linux-persist-hunter.git
+cd linux-persist-hunter
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+
+
+
+
+
+
 
 
 ```
