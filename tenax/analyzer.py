@@ -1,6 +1,7 @@
 from tenax.checks.cron import analyze_cron_locations
 from tenax.checks.shell_profiles import analyze_shell_profile_locations
 from tenax.checks.ssh import analyze_ssh_locations
+from tenax.checks.sudoers import analyze_sudoers_locations
 from tenax.checks.systemd import analyze_systemd_locations
 from tenax.reporter import output_results
 
@@ -13,15 +14,14 @@ def run_analysis(output_path=None, output_format="text", top=20) -> None:
         "systemd": analyze_systemd_locations(),
         "shell_profiles": analyze_shell_profile_locations(),
         "ssh": analyze_ssh_locations(),
+        "sudoers": analyze_sudoers_locations(),
     }
 
-    # Print summary
     print("\n=== MODULE SUMMARY ===")
     for module, results in module_results.items():
         print(f"{module}: {len(results)} findings")
     print("")
 
-    # Flatten results
     for results in module_results.values():
         findings.extend(results)
 
