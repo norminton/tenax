@@ -2,46 +2,92 @@
 
 ## Overview
 
-This directory contains a **complete analyst guide and playbook for identifying Linux persistence**.
+This playbook exists because I ran into a problem.
 
-The goal of this documentation is to provide a structured, repeatable methodology for:
+During an investigation on a compromised Linux server, I realized very quickly that I didn’t fully understand the depth of persistence on Linux.
 
-- identifying persistence mechanisms  
-- prioritizing investigation  
-- validating suspicious artifacts  
-- understanding attacker tradecraft  
+There was no single place to look.  
+No checklist that felt complete.  
+No point where I could confidently say, “I’ve covered everything.”
 
-This is not just reference material. It is designed to be used **during real investigations**.
+Every time I thought I was done, there was another file path, another mechanism, another place persistence could be hiding.
+
+That’s the reality of Linux.
+
+Persistence isn’t centralized. It’s everywhere.
 
 ---
 
-## Highest Value Documents
+## Why This Exists
 
-If you are actively investigating a system, start here:
+This project started as a way to solve that problem for myself.
 
-### 1. Analyst Guide
+I wanted:
+
+- a way to **automate the obvious checks**  
+- a structured way to **prioritize what matters first**  
+- a **complete playbook** I could follow during an investigation  
+- a single place to keep **all persistence knowledge and notes**  
+
+Because the truth is:
+
+> **You cannot fully automate Linux persistence analysis.**
+
+There are too many edge cases, too many mechanisms, and too many ways attackers can chain them together.
+
+So instead of trying to automate everything, I built:
+
+- a tool to **surface the most important findings**  
+- a playbook to **walk through the rest correctly**  
+- a collector to **automate the file system analysis**
+
+And I’m putting it public so nobody else has to figure this out from scratch.
+
+---
+
+## What This Is
+
+This directory is a **complete Linux persistence analysis playbook**.
+
+It is designed to be used **during a real investigation**, not just read once and forgotten.
+
+It gives you:
+
+- a structured workflow  
+- deep technical breakdowns of each persistence mechanism  
+- guidance on what actually matters vs noise  
+- real-world tradecraft context  
+
+---
+
+## Where to Start
+
+If you’re actively investigating a system, start here:
+
+### Analyst Guide
 - [Analyst Guide](analyst-guide.md)
 
-The **core playbook** for Linux persistence analysis.
+This is the playbook.
 
-Provides:
-- step-by-step investigation workflow  
-- how to validate findings  
-- how to confirm persistence  
-- how to avoid common mistakes  
+It walks you through:
+- how to approach a Linux investigation  
+- how to use Tenax output effectively  
+- how to validate persistence  
+- how to avoid missing hidden mechanisms  
 
 ---
 
-### 2. Module Notes
+### Module Notes
 Located in: [`modules/`](modules/)
 
-These are the **most important technical references**.
+This is where the depth is.
 
-Each module contains:
-- deep explanation of the persistence mechanism  
-- real attacker tradecraft  
-- detection guidance  
-- investigative methodology  
+Each module breaks down a persistence mechanism:
+
+- how it works  
+- how attackers use it  
+- what it looks like in real environments  
+- how to investigate it properly  
 
 Modules:
 
@@ -61,67 +107,47 @@ Modules:
 - [PAM](modules/pam.md)  
 - [Capabilities](modules/capabilities.md)  
 
-> **If you understand the module notes, you understand Linux persistence.**
+> **This is the reference you use when you’re deep in an investigation and need to understand exactly what you’re looking at.**
 
 ---
 
 ## Supporting Documents
 
-These documents enhance analysis and improve decision-making, but are secondary to the Analyst Guide and Module Notes.
-
-### Investigation Principles
+These help you make better decisions while investigating:
 
 - [Triage Principles](triage-principles.md)  
 - [False Positives](false-positives.md)  
-
-Provide:
-- prioritization strategy  
-- false positive reduction  
-- investigation mindset  
-
----
-
-### Threat Tradecraft
-
 - [APT Tradecraft Notes](apt-tradecraft-notes.md)  
 
-Provides:
-- real-world persistence usage by threat actors  
-- mapping between techniques and attacker behavior  
-- context for why persistence mechanisms are used  
+They provide:
+- prioritization guidance  
+- validation strategies  
+- real-world attacker behavior  
 
 ---
 
-## How to Use This Playbook
+## How to Use This
 
-1. Start with the **Analyst Guide**  
-2. Use **Tenax analyze output** to prioritize  
-3. Dive into relevant **Module Notes**  
-4. Use **Triage Principles** to guide investigation order  
-5. Use **False Positives** to validate findings  
-6. Use **APT Tradecraft Notes** for context and pattern recognition  
+1. Run Tenax and review the **analyze output**  
+2. Use the **Analyst Guide** to structure your investigation  
+3. Dive into **Module Notes** based on findings  
+4. Use supporting docs to refine decisions  
 
 ---
 
-## Key Takeaway
+## Final Thought
 
-This playbook is designed to answer one question:
+This exists because Linux persistence is deeper than it looks.
 
-> **How does an attacker stay on this Linux system?**
+If you’ve ever felt like:
 
-If you follow this documentation, you will be able to:
+- you might be missing something  
+- there’s always one more place to check  
+- you’re not fully confident the system is clean  
 
-- identify persistence mechanisms  
-- understand how they work  
-- determine if they are malicious  
-- uncover additional hidden persistence  
+You’re not wrong.
 
----
+> **The goal isn’t just to find persistence.  
+It’s to understand how the attacker is staying on the system.**
 
-## Final Note
-
-Persistence is rarely a single artifact.
-
-If you find one mechanism, assume there are more.
-
-> **The goal is not to find a file. The goal is to understand the persistence strategy.**
+That’s what this playbook is built for.
