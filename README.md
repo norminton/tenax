@@ -7,7 +7,7 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/<your-username>/tenax.git
+git clone https://github.com/norminton/tenax.git
 cd tenax
 python main.py analyze
 ```
