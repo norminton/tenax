@@ -111,90 +111,141 @@ Unlike other mechanisms:
 
 ## Common Attacker Tradecraft
 
-### 1. Malicious PAM Module Injection
+### 1. System-Wide Credential Logging via PAM Module Injection
 
-Example:
+Target file:
+
+```text
+/etc/pam.d/sshd
+```
+
+Example modification:
 
 ```text
 auth required /lib/security/pam_backdoor.so
 ```
 
 Execution flow:
-1. Attacker writes or installs a malicious PAM module  
-2. PAM configuration is modified to include the module  
-3. User attempts to authenticate (e.g., SSH or sudo)  
+1. Attacker drops malicious module:
+   ```text
+   /lib/security/pam_backdoor.so
+   ```
+2. Modifies SSH PAM configuration  
+3. User attempts SSH login  
 4. Malicious module executes during authentication  
+5. Credentials are captured and logged  
 
 Why attackers use this:
-- Executes every time authentication occurs  
-- Can capture credentials or alter behavior  
-- Extremely persistent and high-value  
+- Executes on every SSH login  
+- Captures plaintext credentials  
+- Extremely persistent  
 
 ---
 
-### 2. Credential Harvesting via PAM Hook
+### 2. Credential Logging Using `pam_exec.so`
 
-Example behavior:
-
-A malicious module intercepts authentication functions and logs credentials.
-
-Execution flow:
-1. User attempts login or runs `sudo`  
-2. PAM module receives username and password  
-3. Credentials are written to a hidden file (e.g., `/tmp/.credlog`)  
-4. Authentication proceeds normally to avoid suspicion  
-
-Why attackers use this:
-- Stealthy credential capture  
-- No need for keyloggers  
-- Works across multiple services  
-
----
-
-### 3. Backdooring Authentication Logic
-
-Example:
+Target file:
 
 ```text
-auth sufficient pam_backdoor.so
+/etc/pam.d/sudo
+```
+
+Example modification:
+
+```text
+auth optional pam_exec.so /tmp/log.sh
+```
+
+Malicious script:
+
+```bash
+#!/bin/bash
+echo "$(date) $(whoami)" >> /tmp/.log
 ```
 
 Execution flow:
-1. Attacker inserts custom PAM module  
-2. Module allows authentication with attacker-defined credentials  
-3. PAM stack continues or short-circuits based on control flag  
-4. Attacker gains access without valid credentials  
+1. Attacker adds `pam_exec.so` line  
+2. User runs `sudo`  
+3. PAM executes `/tmp/log.sh`  
+4. Script logs activity or credentials  
 
 Why attackers use this:
-- Bypass authentication entirely  
-- Maintain access even if passwords change  
-- Extremely difficult to detect without config inspection  
+- No custom binary required  
+- Easy to deploy  
+- Blends with legitimate PAM modules  
 
 ---
 
-### 4. Modifying Existing PAM Configuration
+### 3. Password Capture via `pam_exec.so` (Real Tradecraft)
+
+Target file:
+
+```text
+/etc/pam.d/sshd
+```
 
 Example:
 
 ```text
+auth optional pam_exec.so expose_authtok /tmp/cred.sh
+```
+
+Malicious script:
+
+```bash
+#!/bin/bash
+read password
+echo "$(date) $PAM_USER:$password" >> /tmp/.creds
+```
+
+Execution flow:
+1. User attempts SSH login  
+2. PAM passes password to script via `expose_authtok`  
+3. Script captures credentials  
+4. Authentication continues normally  
+
+Why attackers use this:
+- Direct plaintext password capture  
+- No need for kernel/rootkits  
+- Very stealthy  
+
+---
+
+### 4. Backdoor Authentication (Bypass Password)
+
+Target file:
+
+```text
+/etc/pam.d/sshd
+```
+
+Example:
+
+```text
+auth sufficient /lib/security/pam_backdoor.so
 auth required pam_unix.so
-auth optional pam_exec.so /tmp/script.sh
 ```
 
 Execution flow:
-1. Attacker modifies existing PAM configuration  
-2. Adds execution hook using legitimate module (`pam_exec.so`)  
-3. Script executes during authentication events  
-4. Malicious logic runs under authentication context  
+1. Attacker installs malicious module  
+2. Module checks for attacker password/key  
+3. If matched → authentication succeeds  
+4. If not → normal auth continues  
 
 Why attackers use this:
-- Blends into existing configuration  
-- Avoids introducing new modules  
-- Uses legitimate PAM functionality  
+- Silent authentication bypass  
+- Does not break normal logins  
+- Hard to detect during casual inspection  
 
 ---
 
-### 5. Persistence via `pam_exec.so`
+### 5. Persistence via `/etc/pam.d/common-auth` (Debian/Ubuntu)
+
+Target file:
+
+```text
+/etc/pam.d/common-auth
+```
 
 Example:
 
@@ -203,59 +254,93 @@ auth optional pam_exec.so /tmp/hook.sh
 ```
 
 Execution flow:
-1. PAM executes external script during authentication  
-2. Script runs every time authentication occurs  
-3. Attacker gains repeated execution opportunities  
+1. Attacker modifies shared PAM stack  
+2. Affects multiple services:
+   - SSH  
+   - sudo  
+   - login  
+3. Script executes on all authentication events  
 
 Why attackers use this:
-- No custom binary required  
-- Uses built-in PAM functionality  
-- Easier to deploy than compiled modules  
+- Broad coverage  
+- Single change impacts multiple services  
+- High execution frequency  
 
 ---
 
-### 6. Targeting Specific Services (e.g., SSH)
+### 6. Stealthy Logging via Existing Module Modification
 
-Example:
-
-File: `/etc/pam.d/sshd`
+Target file:
 
 ```text
-auth required pam_backdoor.so
+/etc/pam.d/sudo
 ```
 
-Execution flow:
-1. Attacker modifies SSH PAM configuration  
-2. Only SSH authentication is affected  
-3. Credentials or access are controlled via PAM module  
-4. Persistence is scoped to remote access  
-
-Why attackers use this:
-- Focuses on high-value access paths  
-- Reduces visibility compared to global changes  
-- Targets administrator behavior  
-
----
-
-### 7. Stealth Through Control Flags
-
 Example:
 
 ```text
-auth sufficient pam_backdoor.so
 auth required pam_unix.so
+auth optional pam_exec.so /usr/local/bin/.hidden.sh
 ```
 
 Execution flow:
-1. PAM module executes first  
-2. If attacker condition is met → authentication succeeds  
-3. If not → normal authentication continues  
-4. User sees no disruption  
+1. Attacker appends execution line after legit module  
+2. User runs `sudo`  
+3. Legit auth happens  
+4. Malicious script executes silently  
 
 Why attackers use this:
-- Avoids breaking login functionality  
-- Reduces detection risk  
-- Maintains normal system behavior  
+- Blends into normal config  
+- Less suspicious than replacing modules  
+- Maintains system stability  
+
+---
+
+### 7. Malicious Module Placement in Legitimate Path
+
+Example:
+
+```text
+/lib/security/pam_unix.so   ← replaced with malicious version
+```
+
+Execution flow:
+1. Attacker replaces legitimate PAM module  
+2. All services using `pam_unix.so` are affected  
+3. Credentials are intercepted globally  
+4. System behaves normally otherwise  
+
+Why attackers use this:
+- Massive coverage  
+- No config changes required  
+- Extremely stealthy  
+
+---
+
+### 8. Targeting Root Authentication Paths
+
+Target file:
+
+```text
+/etc/pam.d/su
+```
+
+Example:
+
+```text
+auth optional pam_exec.so /tmp/root_hook.sh
+```
+
+Execution flow:
+1. Attacker targets `su` usage  
+2. Admin attempts privilege escalation  
+3. Script executes during authentication  
+4. Root-level activity is captured  
+
+Why attackers use this:
+- Targets high-value actions  
+- Captures privileged behavior  
+- Useful for lateral movement    
 
 ---
 
