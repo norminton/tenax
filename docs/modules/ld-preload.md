@@ -295,20 +295,6 @@ Why attackers do this:
 - Ensures persistence survives partial cleanup
 - Forces analyst to remove multiple footholds
 
----
-
-## Key Tradecraft Insight
-
-LD_PRELOAD persistence is rarely used in isolation.
-
-It is often combined with:
-
-- Shell profile persistence (execution trigger)
-- SSH persistence (access maintenance)
-- Sudoers abuse (privilege escalation)
-- Cron/systemd (fallback execution)
-
-> The shared object is the payload — the surrounding system determines how often and where it runs.
 
 ---
 
@@ -327,6 +313,18 @@ Normal systems may legitimately use:
 - `/etc/ld.so.conf`
 - `/etc/ld.so.conf.d/`
 - package-managed shared objects
+  
+These files are used to define shared library search paths and are part of normal dynamic linker behavior.
+
+By contrast, `/etc/ld.so.preload` is often **absent by default** and may only appear when software or an administrator explicitly creates it.
+
+This distinction is analytically important:
+
+- The presence of `ld.so.conf` and `ld.so.conf.d/` is normal
+- The presence of `ld.so.preload` is more unusual and often warrants closer investigation
+
+> The absence of `/etc/ld.so.preload` is not evidence that dynamic linker abuse is impossible.  
+> It only means that this specific preload mechanism is not currently present as a file.
 
 However, those entries should generally:
 - point to expected directories
@@ -375,43 +373,6 @@ These cases are less common on ordinary Linux endpoints and servers, but they do
 - **T1574.006 – Hijack Execution Flow: Dynamic Linker Hijacking**
 
 This is one of the clearest ATT&CK mappings in Linux persistence analysis because the mechanism directly alters the loader’s behavior to introduce malicious code into trusted program execution.  
-
----
-
-## Procedure and Threat Tradecraft
-
-ATT&CK explicitly documents Linux dynamic linker hijacking as a real adversary technique. ATT&CK also includes Linux malware such as **MEDUSA**, which is described as capable of dynamic linker hijacking, command execution, and credential logging.  
-
-That matters analytically because it demonstrates how adversaries value this mechanism:
-
-- it is stealthier than obvious scheduled tasks
-- it allows code to run inside trusted processes
-- it can support multiple objectives at once
-
-### Common Real-World Logic Pattern
-
-A practical attacker chain often looks like this:
-
-1. Gain shell access
-2. Drop malicious shared object
-3. Establish preload mechanism
-4. Trigger execution through trusted binaries
-5. Maintain access or intercept sensitive activity
-
-Example workflow:
-
-```text
-echo '/tmp/libevil.so' > /etc/ld.so.preload
-```
-
-or:
-
-```text
-echo 'export LD_PRELOAD=/tmp/libevil.so' >> ~/.bashrc
-```
-
-In the first case, the mechanism is broadly system-scoped.  
-In the second, it is user-scoped and tied to shell activity.
 
 ---
 
