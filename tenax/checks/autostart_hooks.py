@@ -1,132 +1,284 @@
+from __future__ import annotations
+
+import hashlib
+import pwd
+import re
 from pathlib import Path
+from typing import Any
 
-from tenax.utils import get_file_owner, get_file_permissions, is_file_safe, path_exists, sha256_file
+from tenax.utils import is_file_safe, path_exists
 
-
-SYSTEM_PATHS = [
+AUTOSTART_PATHS = [
     Path("/etc/xdg/autostart"),
+    Path("/usr/share/autostart"),
+    Path.home() / ".config/autostart",
 ]
 
-USER_PATHS = [
-    ".config/autostart",
-]
-
-
-SUSPICIOUS_KEYWORDS = [
-    "curl",
-    "wget",
-    "bash",
-    "sh",
+TEMP_PATH_PATTERNS = (
     "/tmp/",
+    "/var/tmp/",
     "/dev/shm/",
-]
+    "/run/shm/",
+)
+
+USER_PATH_REGEX = re.compile(
+    r"(/home/[^/\s]+/|/root/\.|/root/\.local/|/root/\.cache/)",
+    re.IGNORECASE,
+)
+
+HIDDEN_PATH_REGEX = re.compile(
+    r"""
+    (
+        /tmp/|/var/tmp/|/dev/shm/|/run/shm/|
+        /home/[^/\s]+/|/root/
+    )
+    \.[^/\s'"]+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+EXEC_LINE_REGEX = re.compile(r"^Exec=(.+)", re.IGNORECASE)
+HIDDEN_FLAG_REGEX = re.compile(r"^Hidden\s*=\s*true", re.IGNORECASE)
+AUTOSTART_ENABLED_REGEX = re.compile(r"^X-GNOME-Autostart-enabled\s*=\s*true", re.IGNORECASE)
+
+DOWNLOAD_TOOL_REGEX = re.compile(
+    r"\b(curl|wget|fetch|ftpget|tftp|lwp-download|busybox\s+wget)\b",
+    re.IGNORECASE,
+)
+
+PIPE_TO_INTERPRETER_REGEX = re.compile(
+    r"""
+    \b(curl|wget)\b.*?(\||;\s*).*?\b(sh|bash|python|perl|php)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+ENCODED_REGEX = re.compile(r"\bbase64\b.*(-d|--decode)", re.IGNORECASE)
+
+REVERSE_SHELL_REGEX = re.compile(
+    r"""
+    /dev/tcp/|
+    \bnc(?:at)?\b.*\s-e\s|
+    \bsocat\b.*exec:
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
-def analyze_autostart_hook_locations():
-    findings = []
+def analyze_autostart_hook_locations() -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
 
-    for path in SYSTEM_PATHS:
-        if not path_exists(path):
+    for base in AUTOSTART_PATHS:
+        if not path_exists(base):
             continue
 
-        for child in _safe_rglob(path):
-            if is_file_safe(child):
-                findings.extend(_analyze_file(child))
+        if base.is_dir():
+            for child in base.iterdir():
+                child_str = str(child)
+                if child_str in seen_paths:
+                    continue
+                seen_paths.add(child_str)
 
-    for home in _get_home_dirs():
-        for rel in USER_PATHS:
-            target = home / rel
-            if not path_exists(target):
-                continue
+                if not is_file_safe(child):
+                    continue
 
-            for child in _safe_rglob(target):
-                if is_file_safe(child):
-                    findings.extend(_analyze_file(child))
+                finding = _analyze_file(child)
+                if finding:
+                    findings.append(finding)
 
     return findings
 
 
-def collect_autostart_hook_locations(hash_files=False):
-    return []
+def _analyze_file(path: Path) -> dict[str, Any] | None:
+    hits: dict[str, dict[str, Any]] = {}
 
-
-def _analyze_file(path: Path):
-    findings = []
+    stat_info = _safe_stat(path)
+    if stat_info:
+        if stat_info.st_uid != 0:
+            _record_hit(
+                hits,
+                reason="Autostart entry owned by non-root account",
+                score=60,
+                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
+                category="ownership",
+            )
 
     try:
         content = path.read_text(errors="ignore")
-    except:
-        return findings
+    except Exception:
+        return None
 
-    score = 0
-    reasons = []
-    preview_line = None
+    exec_line = None
+    hidden_flag = False
 
-    exec_line = _extract_exec(content)
-
-    if exec_line:
-        preview_line = f"Exec={exec_line}"
-
-        if exec_line.startswith("/tmp"):
-            score += 40
-            reasons.append("Exec from /tmp")
-
-    for line in content.splitlines():
-        stripped = line.strip()
-
-        if not stripped or stripped.startswith("#"):
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        stripped = raw_line.strip()
+        if not stripped:
             continue
 
-        for keyword in SUSPICIOUS_KEYWORDS:
-            if keyword in stripped:
-                if preview_line is None:
-                    preview_line = stripped
-                score += 20
-                reasons.append(keyword)
+        if EXEC_LINE_REGEX.match(stripped):
+            exec_line = EXEC_LINE_REGEX.match(stripped).group(1)
+            _analyze_exec_line(hits, exec_line, line_number)
 
-    if score > 0:
-        findings.append(
-            {
-                "path": str(path),
-                "score": score,
-                "severity": _severity(score),
-                "reason": "; ".join(set(reasons)),
-                "preview": preview_line,
-            }
+        if HIDDEN_FLAG_REGEX.match(stripped):
+            hidden_flag = True
+
+        if AUTOSTART_ENABLED_REGEX.match(stripped):
+            _record_hit(
+                hits,
+                reason="Autostart entry explicitly enabled",
+                score=10,
+                preview=_with_line_number(line_number, stripped),
+                category="enabled",
+            )
+
+    if hidden_flag and exec_line:
+        _record_hit(
+            hits,
+            reason="Autostart entry is hidden but still defines execution",
+            score=70,
+            preview=f"Exec={exec_line}",
+            category="hidden-exec",
         )
 
-    return findings
+    return _finalize_finding(path, hits)
+
+def _analyze_exec_line(
+    hits: dict[str, dict[str, Any]],
+    exec_line: str,
+    line_number: int,
+) -> None:
+    lower = exec_line.lower()
+
+    if any(p in lower for p in TEMP_PATH_PATTERNS):
+        _record_hit(
+            hits,
+            reason="Autostart executes from a temporary path",
+            score=90,
+            preview=_with_line_number(line_number, exec_line),
+            category="temp-exec",
+        )
+
+    if USER_PATH_REGEX.search(exec_line):
+        _record_hit(
+            hits,
+            reason="Autostart executes from user-controlled path",
+            score=85,
+            preview=_with_line_number(line_number, exec_line),
+            category="user-exec",
+        )
+
+    if HIDDEN_PATH_REGEX.search(exec_line):
+        _record_hit(
+            hits,
+            reason="Autostart references hidden payload path",
+            score=80,
+            preview=_with_line_number(line_number, exec_line),
+            category="hidden-path",
+        )
+
+    if DOWNLOAD_TOOL_REGEX.search(exec_line):
+        _record_hit(
+            hits,
+            reason="Autostart contains network download behavior",
+            score=60,
+            preview=_with_line_number(line_number, exec_line),
+            category="download",
+        )
+
+    if PIPE_TO_INTERPRETER_REGEX.search(exec_line):
+        _record_hit(
+            hits,
+            reason="Autostart downloads and executes payload inline",
+            score=100,
+            preview=_with_line_number(line_number, exec_line),
+            category="download-exec",
+        )
+
+    if ENCODED_REGEX.search(exec_line):
+        _record_hit(
+            hits,
+            reason="Autostart decodes base64 payload",
+            score=70,
+            preview=_with_line_number(line_number, exec_line),
+            category="encoded",
+        )
+
+    if REVERSE_SHELL_REGEX.search(exec_line):
+        _record_hit(
+            hits,
+            reason="Autostart contains reverse shell behavior",
+            score=100,
+            preview=_with_line_number(line_number, exec_line),
+            category="reverse-shell",
+        )
 
 
-def _extract_exec(content):
-    for line in content.splitlines():
-        if line.strip().startswith("Exec="):
-            return line.split("=", 1)[1].strip()
-    return None
+def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    if not hits:
+        return None
+
+    reasons = [v["reason"] for v in hits.values()]
+    previews = [v["preview"] for v in hits.values() if v.get("preview")]
+    categories = {v["category"] for v in hits.values()}
+    score = sum(v["score"] for v in hits.values())
+
+    high_conf = {
+        "temp-exec",
+        "user-exec",
+        "hidden-path",
+        "download-exec",
+        "reverse-shell",
+    }
+
+    if not (categories & high_conf) and score < 90:
+        return None
+
+    primary_reason = max(hits.values(), key=lambda x: x["score"])["reason"]
+
+    return {
+        "path": str(path),
+        "score": score,
+        "severity": _severity(score),
+        "reason": primary_reason,
+        "reasons": reasons,
+        "preview": previews[0] if previews else None,
+    }
 
 
-def _get_home_dirs():
-    homes = []
-    base = Path("/home")
-
-    if base.exists():
-        for user in base.iterdir():
-            if user.is_dir():
-                homes.append(user)
-
-    homes.append(Path("/root"))
-    return homes
+def _record_hit(hits, reason, score, preview, category):
+    if category not in hits or score > hits[category]["score"]:
+        hits[category] = {
+            "reason": reason,
+            "score": score,
+            "preview": preview,
+            "category": category,
+        }
 
 
-def _safe_rglob(path):
+def _safe_stat(path: Path):
     try:
-        return list(path.rglob("*"))
-    except:
-        return []
+        return path.stat()
+    except Exception:
+        return None
 
 
-def _severity(score):
-    if score >= 80:
+def _owner_from_uid(uid: int) -> str:
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return str(uid)
+
+
+def _with_line_number(n: int, line: str) -> str:
+    return f"line {n}: {line.strip()}"
+
+
+def _severity(score: int) -> str:
+    if score >= 140:
+        return "CRITICAL"
+    if score >= 90:
         return "HIGH"
     if score >= 50:
         return "MEDIUM"
