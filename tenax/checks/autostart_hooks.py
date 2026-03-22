@@ -64,6 +64,56 @@ REVERSE_SHELL_REGEX = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+def collect_autostart_hook_locations(hash_files: bool = False) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    for base in AUTOSTART_PATHS:
+        if not path_exists(base):
+            continue
+
+        if base.is_dir():
+            for child in base.iterdir():
+                child_str = str(child)
+                if child_str in seen_paths:
+                    continue
+                seen_paths.add(child_str)
+
+                if not is_file_safe(child):
+                    continue
+
+                artifacts.append(_build_collect_record(child, hash_files=hash_files))
+
+    return artifacts
+
+def _build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
+    record = {
+        "path": str(path),
+        "type": "artifact",
+        "exists": path.exists(),
+        "owner": "unknown",
+        "permissions": "unknown",
+    }
+
+    try:
+        stat_info = path.lstat() if path.is_symlink() else path.stat()
+        record["permissions"] = oct(stat_info.st_mode & 0o777)
+    except Exception:
+        pass
+
+    try:
+        stat_info = path.lstat() if path.is_symlink() else path.stat()
+        record["owner"] = pwd.getpwuid(stat_info.st_uid).pw_name
+    except Exception:
+        pass
+
+    if hash_files and path.exists() and path.is_file() and not path.is_symlink():
+        try:
+            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except Exception:
+            pass
+
+    return record
 
 def analyze_autostart_hook_locations() -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
