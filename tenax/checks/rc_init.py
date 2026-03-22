@@ -5,206 +5,93 @@ from pathlib import Path
 from tenax.utils import is_file_safe, path_exists
 
 RC_PATHS = [
-    Path("/etc/rc.local"),
     Path("/etc/init.d"),
-    Path("/etc/rc0.d"),
-    Path("/etc/rc1.d"),
-    Path("/etc/rc2.d"),
-    Path("/etc/rc3.d"),
-    Path("/etc/rc4.d"),
-    Path("/etc/rc5.d"),
-    Path("/etc/rc6.d"),
+    Path("/etc/rc.local"),
 ]
 
-SUSPICIOUS_RULES = [
-    {
-        "name": "curl-download",
-        "pattern": "curl",
-        "score": 30,
-        "reason": "Init artifact contains network retrieval via curl",
-    },
-    {
-        "name": "wget-download",
-        "pattern": "wget",
-        "score": 30,
-        "reason": "Init artifact contains network retrieval via wget",
-    },
-    {
-        "name": "netcat-execution",
-        "pattern": "nc ",
-        "score": 35,
-        "reason": "Init artifact contains netcat execution logic",
-    },
-    {
-        "name": "python-execution",
-        "pattern": "python",
-        "score": 20,
-        "reason": "Init artifact contains Python execution logic",
-    },
-    {
-        "name": "perl-execution",
-        "pattern": "perl",
-        "score": 20,
-        "reason": "Init artifact contains Perl execution logic",
-    },
-    {
-        "name": "bash-command",
-        "pattern": "bash -c",
-        "score": 30,
-        "reason": "Init artifact contains bash command execution",
-    },
-    {
-        "name": "sh-command",
-        "pattern": "sh -c",
-        "score": 30,
-        "reason": "Init artifact contains shell command execution",
-    },
-    {
-        "name": "temp-path",
-        "pattern": "/tmp/",
-        "score": 40,
-        "reason": "Init artifact references a temporary directory path",
-    },
-    {
-        "name": "shm-path",
-        "pattern": "/dev/shm/",
-        "score": 45,
-        "reason": "Init artifact references an in-memory temporary path",
-    },
-    {
-        "name": "var-tmp-path",
-        "pattern": "/var/tmp/",
-        "score": 40,
-        "reason": "Init artifact references /var/tmp",
-    },
-    {
-        "name": "base64",
-        "pattern": "base64",
-        "score": 25,
-        "reason": "Init artifact contains base64-related content",
-    },
-    {
-        "name": "nohup",
-        "pattern": "nohup",
-        "score": 20,
-        "reason": "Init artifact contains detached execution behavior",
-    },
-    {
-        "name": "setsid",
-        "pattern": "setsid",
-        "score": 20,
-        "reason": "Init artifact contains detached session execution",
-    },
+KEYWORD_RULES = [
+    ("curl", 30, "Network retrieval via curl"),
+    ("wget", 30, "Network retrieval via wget"),
+    ("nc", 35, "Netcat execution detected"),
+    ("ncat", 35, "Netcat execution detected"),
+    ("bash -c", 30, "Bash command execution"),
+    ("sh -c", 30, "Shell command execution"),
+    ("python", 20, "Python execution detected"),
+    ("perl", 20, "Perl execution detected"),
+    ("base64", 25, "Encoded payload usage"),
+    ("nohup", 20, "Detached execution (nohup)"),
+    ("setsid", 20, "Detached session execution"),
 ]
 
-SHELL_INTERPRETERS = [
-    "/bin/sh",
-    "/bin/bash",
-    "/usr/bin/bash",
-    "/usr/bin/sh",
+PATH_RULES = [
+    ("/tmp/", 40, "References /tmp (suspicious execution path)"),
+    ("/var/tmp/", 40, "References /var/tmp (suspicious execution path)"),
+    ("/dev/shm/", 50, "References in-memory path /dev/shm"),
 ]
+
+INTERPRETERS = ["#!/bin/sh", "#!/bin/bash"]
 
 
 def analyze_rc_init_locations() -> list[dict]:
-    findings: list[dict] = []
+    findings = []
 
-    for path in RC_PATHS:
-        if not path_exists(path):
+    for base in RC_PATHS:
+        if not path_exists(base):
             continue
 
-        if path.is_dir():
-            for child in _safe_iterdir(path):
-                if not is_file_safe(child):
-                    continue
-                findings.extend(_analyze_file(child))
-            continue
-
-        if is_file_safe(path):
-            findings.extend(_analyze_file(path))
+        if base.is_dir():
+            for file in base.iterdir():
+                if is_file_safe(file):
+                    findings.extend(_analyze_file(file))
+        else:
+            findings.extend(_analyze_file(base))
 
     return findings
 
 
-def collect_rc_init_locations(hash_files: bool = False) -> list[dict]:
-    return []
-
-
 def _analyze_file(path: Path) -> list[dict]:
-    findings: list[dict] = []
+    findings = []
 
     try:
-        if path.is_symlink():
-            findings.extend(_analyze_symlink(path))
-            return findings
-
         content = path.read_text(errors="ignore")
     except Exception:
         return findings
 
     score = 0
-    reasons: list[str] = []
-    preview_line: str | None = None
-    lowered_lines = content.splitlines()
+    reasons = []
+    preview = None
 
-    for raw_line in lowered_lines:
-        stripped = raw_line.strip()
+    for line in content.splitlines():
+        stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
 
-        line_lower = stripped.lower()
+        lower = stripped.lower()
 
-        for rule in SUSPICIOUS_RULES:
-            if rule["pattern"] in line_lower:
-                score += int(rule["score"])
-                reasons.append(str(rule["reason"]))
-                if preview_line is None:
-                    preview_line = stripped
+        # Keyword detection
+        for keyword, pts, reason in KEYWORD_RULES:
+            if keyword in lower:
+                score += pts
+                reasons.append(reason)
+                if not preview:
+                    preview = stripped
 
-        if stripped.startswith("#!") and any(interpreter in line_lower for interpreter in SHELL_INTERPRETERS):
+        # Path detection
+        for keyword, pts, reason in PATH_RULES:
+            if keyword in lower:
+                score += pts
+                reasons.append(reason)
+                if not preview:
+                    preview = stripped
+
+        # Interpreter detection
+        if any(interp in lower for interp in INTERPRETERS):
             score += 10
-            reasons.append("Init artifact declares a shell interpreter")
-            if preview_line is None:
-                preview_line = stripped
+            reasons.append("Script declares shell interpreter")
+            if not preview:
+                preview = stripped
 
-    unique_reasons = _dedupe_keep_order(reasons)
-
-    if score > 0:
-        findings.append(
-            {
-                "path": str(path),
-                "score": score,
-                "severity": _severity(score),
-                "reason": unique_reasons[0],
-                "reasons": unique_reasons,
-                "preview": preview_line,
-            }
-        )
-
-    return findings
-
-
-def _analyze_symlink(path: Path) -> list[dict]:
-    findings: list[dict] = []
-
-    try:
-        target = path.resolve(strict=False)
-    except Exception:
-        return findings
-
-    reasons: list[str] = []
-    score = 0
-
-    target_str = str(target)
-
-    if "/tmp/" in target_str:
-        score += 50
-        reasons.append("Init symlink target points into /tmp")
-    if "/var/tmp/" in target_str:
-        score += 45
-        reasons.append("Init symlink target points into /var/tmp")
-    if "/dev/shm/" in target_str:
-        score += 55
-        reasons.append("Init symlink target points into /dev/shm")
+    reasons = list(dict.fromkeys(reasons))  # dedupe but preserve order
 
     if score > 0:
         findings.append(
@@ -214,37 +101,17 @@ def _analyze_symlink(path: Path) -> list[dict]:
                 "severity": _severity(score),
                 "reason": reasons[0],
                 "reasons": reasons,
-                "preview": f"symlink -> {target}",
+                "preview": preview,
             }
         )
 
     return findings
 
 
-def _safe_iterdir(path: Path) -> list[Path]:
-    try:
-        return list(path.iterdir())
-    except Exception:
-        return []
-
-
-def _dedupe_keep_order(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    output: list[str] = []
-
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        output.append(value)
-
-    return output
-
-
 def _severity(score: int) -> str:
-    if score >= 90:
+    if score >= 100:
         return "HIGH"
-    if score >= 50:
+    if score >= 60:
         return "MEDIUM"
     if score >= 20:
         return "LOW"
