@@ -1,9 +1,14 @@
+from __future__ import annotations
+
+import hashlib
+import pwd
+import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from tenax.utils import path_exists
-
 
 CAPABILITY_SCAN_PATHS = [
     Path("/bin"),
@@ -18,26 +23,62 @@ CAPABILITY_SCAN_PATHS = [
     Path("/var/tmp"),
 ]
 
-HIGH_RISK_CAPABILITIES = [
-    "cap_setuid",
-    "cap_setgid",
-    "cap_sys_admin",
-    "cap_sys_ptrace",
-    "cap_dac_override",
-    "cap_dac_read_search",
-]
-
-SUSPICIOUS_PATHS = [
+TEMP_PATH_PATTERNS = (
     "/tmp/",
     "/var/tmp/",
     "/dev/shm/",
-    "/home/",
-    "/opt/",
-]
+    "/run/shm/",
+)
+
+USER_PATH_REGEX = re.compile(
+    r"^(/home/[^/\s]+/|/root/\.|/root/\.local/|/root/\.cache/)",
+    re.IGNORECASE,
+)
+
+HIDDEN_PATH_REGEX = re.compile(
+    r"""
+    (
+        /tmp/|/var/tmp/|/dev/shm/|/run/shm/|
+        /home/[^/\s]+/|/root/
+    )
+    \.[^/\s'"]+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+HIGH_RISK_CAPABILITIES = {
+    "cap_setuid": 95,
+    "cap_setgid": 90,
+    "cap_sys_admin": 100,
+    "cap_sys_ptrace": 95,
+    "cap_dac_override": 90,
+    "cap_dac_read_search": 85,
+    "cap_sys_module": 100,
+    "cap_sys_rawio": 95,
+    "cap_sys_chroot": 70,
+    "cap_net_admin": 80,
+    "cap_net_raw": 75,
+    "cap_bpf": 90,
+    "cap_checkpoint_restore": 85,
+}
+
+MEDIUM_RISK_CAPABILITIES = {
+    "cap_chown": 25,
+    "cap_fowner": 30,
+    "cap_fsetid": 25,
+    "cap_kill": 35,
+    "cap_mknod": 35,
+    "cap_setfcap": 45,
+    "cap_setpcap": 45,
+    "cap_net_bind_service": 20,
+    "cap_audit_write": 20,
+}
+
+ELF_MAGIC = b"\x7fELF"
 
 
-def analyze_capabilities() -> list[dict]:
-    findings = []
+def analyze_capabilities() -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
 
     if shutil.which("getcap") is None:
         return [
@@ -46,6 +87,7 @@ def analyze_capabilities() -> list[dict]:
                 "score": 0,
                 "severity": "INFO",
                 "reason": "getcap command not available; capability scan skipped",
+                "reasons": ["getcap command not available; capability scan skipped"],
                 "preview": "Install libcap tools to enable capability scanning",
             }
         ]
@@ -53,20 +95,37 @@ def analyze_capabilities() -> list[dict]:
     for scan_path in CAPABILITY_SCAN_PATHS:
         if not path_exists(scan_path):
             continue
-
         findings.extend(_run_getcap(scan_path))
 
     return findings
 
 
-def collect_capabilities(hash_files: bool = False) -> list[dict]:
-    # Capabilities are effectively collected through analysis output for now.
-    # This keeps the collector stable without requiring binary parsing.
-    return []
+def collect_capabilities(hash_files: bool = False) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+
+    if shutil.which("getcap") is None:
+        return artifacts
+
+    seen_paths: set[str] = set()
+
+    for scan_path in CAPABILITY_SCAN_PATHS:
+        if not path_exists(scan_path):
+            continue
+
+        for record in _run_getcap_collect(scan_path):
+            path_value = record["path"]
+            if path_value in seen_paths:
+                continue
+            seen_paths.add(path_value)
+
+            path_obj = Path(path_value)
+            artifacts.append(_build_collect_record(path_obj, record["capabilities"], hash_files))
+
+    return artifacts
 
 
-def _run_getcap(scan_path: Path) -> list[dict]:
-    findings = []
+def _run_getcap(scan_path: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
 
     try:
         result = subprocess.run(
@@ -82,61 +141,347 @@ def _run_getcap(scan_path: Path) -> list[dict]:
     if result.returncode not in (0, 1):
         return findings
 
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
+    for raw_line in result.stdout.splitlines():
+        stripped = raw_line.strip()
         if not stripped:
             continue
 
-        score = 0
-        reasons = []
-        preview_line = stripped
-
-        path_part, _, caps_part = stripped.partition(" = ")
-        if not caps_part:
+        parsed = _parse_getcap_line(stripped)
+        if not parsed:
             continue
 
-        for cap in HIGH_RISK_CAPABILITIES:
-            if cap in caps_part:
-                score += 35
-                reasons.append(f"High-risk Linux capability present: {cap}")
-
-        for bad_path in SUSPICIOUS_PATHS:
-            if bad_path in path_part:
-                score += 25
-                reasons.append(f"Capability assigned in suspicious path: {bad_path}")
-
-        if caps_part:
-            score += 10
-            reasons.append("File has Linux capabilities assigned")
-
-        if score > 0:
-            findings.append(
-                {
-                    "path": path_part,
-                    "score": score,
-                    "severity": _severity_from_score(score),
-                    "reason": "; ".join(_dedupe(reasons)),
-                    "preview": preview_line,
-                }
-            )
+        path_obj, capabilities_text = parsed
+        finding = _analyze_capability_record(path_obj, capabilities_text)
+        if finding:
+            findings.append(finding)
 
     return findings
 
 
-def _dedupe(items: list[str]) -> list[str]:
-    seen = set()
-    ordered = []
+def _run_getcap_collect(scan_path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
 
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            ordered.append(item)
+    try:
+        result = subprocess.run(
+            ["getcap", "-r", str(scan_path)],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return records
 
-    return ordered
+    if result.returncode not in (0, 1):
+        return records
+
+    for raw_line in result.stdout.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+
+        parsed = _parse_getcap_line(stripped)
+        if not parsed:
+            continue
+
+        path_obj, capabilities_text = parsed
+        records.append(
+            {
+                "path": str(path_obj),
+                "capabilities": capabilities_text,
+            }
+        )
+
+    return records
 
 
-def _severity_from_score(score: int) -> str:
-    if score >= 80:
+def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[str, Any] | None:
+    hits: dict[str, dict[str, Any]] = {}
+    path_value = str(path_obj)
+    path_lower = path_value.lower()
+    capability_names = _extract_capability_names(capabilities_text)
+
+    if not capability_names:
+        return None
+
+    _record_hit(
+        hits,
+        reason="File has Linux capabilities assigned",
+        score=10,
+        preview=f"{path_value} = {capabilities_text}",
+        category="has-capabilities",
+    )
+
+    for capability in capability_names:
+        if capability in HIGH_RISK_CAPABILITIES:
+            _record_hit(
+                hits,
+                reason=f"High-risk Linux capability present: {capability}",
+                score=HIGH_RISK_CAPABILITIES[capability],
+                preview=f"{path_value} = {capabilities_text}",
+                category=f"cap-{capability}",
+            )
+        elif capability in MEDIUM_RISK_CAPABILITIES:
+            _record_hit(
+                hits,
+                reason=f"Elevated Linux capability present: {capability}",
+                score=MEDIUM_RISK_CAPABILITIES[capability],
+                preview=f"{path_value} = {capabilities_text}",
+                category=f"cap-{capability}",
+            )
+
+    if _path_startswith_any(path_lower, TEMP_PATH_PATTERNS):
+        _record_hit(
+            hits,
+            reason="Capabilities assigned to a file in a temporary path",
+            score=100,
+            preview=f"{path_value} = {capabilities_text}",
+            category="temp-path",
+        )
+    elif USER_PATH_REGEX.search(path_value):
+        _record_hit(
+            hits,
+            reason="Capabilities assigned to a file in a user-controlled path",
+            score=95,
+            preview=f"{path_value} = {capabilities_text}",
+            category="user-path",
+        )
+    elif HIDDEN_PATH_REGEX.search(path_value):
+        _record_hit(
+            hits,
+            reason="Capabilities assigned to a file at a hidden path",
+            score=85,
+            preview=f"{path_value} = {capabilities_text}",
+            category="hidden-path",
+        )
+
+    if path_lower.startswith("/opt/"):
+        _record_hit(
+            hits,
+            reason="Capabilities assigned to a file under /opt",
+            score=35,
+            preview=f"{path_value} = {capabilities_text}",
+            category="opt-path",
+        )
+
+    stat_info = _safe_stat(path_obj)
+    if stat_info:
+        mode = stat_info.st_mode & 0o777
+        owner_name = _owner_from_uid(stat_info.st_uid)
+
+        if stat_info.st_uid != 0:
+            _record_hit(
+                hits,
+                reason="Capability-bearing file is owned by a non-root account",
+                score=95,
+                preview=f"owner={owner_name}",
+                category="ownership",
+            )
+
+        if mode & 0o002:
+            _record_hit(
+                hits,
+                reason="Capability-bearing file is world-writable",
+                score=100,
+                preview=f"mode={oct(mode)}",
+                category="permissions",
+            )
+        elif mode & 0o020:
+            _record_hit(
+                hits,
+                reason="Capability-bearing file is group-writable",
+                score=65,
+                preview=f"mode={oct(mode)}",
+                category="permissions",
+            )
+
+        if path_obj.is_file():
+            try:
+                raw = path_obj.read_bytes()[:4]
+                if raw != ELF_MAGIC:
+                    _record_hit(
+                        hits,
+                        reason="Capabilities assigned to a non-ELF file",
+                        score=70,
+                        preview=f"{path_value} = {capabilities_text}",
+                        category="non-elf",
+                    )
+            except OSError:
+                pass
+
+    _apply_compound_behavior_bonuses(hits)
+
+    return _finalize_finding(path_obj, capabilities_text, hits)
+
+def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
+    categories = {entry["category"] for entry in hits.values()}
+
+    if any(category.startswith("cap-cap_setuid") or category.startswith("cap-cap_setgid") for category in categories):
+        if "user-path" in categories or "temp-path" in categories or "ownership" in categories:
+            _record_hit(
+                hits,
+                reason="Privilege-related capabilities are assigned to a high-risk file location",
+                score=35,
+                preview=None,
+                category="compound-priv-path",
+            )
+
+    if any(category.startswith("cap-cap_sys_admin") or category.startswith("cap-cap_sys_ptrace") for category in categories):
+        _record_hit(
+            hits,
+            reason="Capabilities include highly sensitive system-level privilege",
+            score=25,
+            preview=None,
+            category="compound-high-priv",
+        )
+
+    if "permissions" in categories and ("user-path" in categories or "temp-path" in categories):
+        _record_hit(
+            hits,
+            reason="Writable file with capabilities exists in a high-risk path",
+            score=40,
+            preview=None,
+            category="compound-writable-risk-path",
+        )
+
+
+def _finalize_finding(
+    path_obj: Path,
+    capabilities_text: str,
+    hits: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not hits:
+        return None
+
+    reasons = [entry["reason"] for entry in hits.values()]
+    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
+    categories = {entry["category"] for entry in hits.values()}
+    score = sum(int(entry["score"]) for entry in hits.values())
+
+    high_confidence_categories = {
+        "temp-path",
+        "user-path",
+        "hidden-path",
+        "ownership",
+        "permissions",
+        "non-elf",
+        "compound-priv-path",
+        "compound-high-priv",
+        "compound-writable-risk-path",
+    }
+
+    has_high_confidence = bool(categories & high_confidence_categories)
+
+    if not has_high_confidence and score < 80:
+        return None
+
+    primary_reason = max(
+        hits.values(),
+        key=lambda entry: int(entry["score"]),
+    )["reason"]
+
+    preview = previews[0] if previews else f"{path_obj} = {capabilities_text}"
+
+    return {
+        "path": str(path_obj),
+        "score": score,
+        "severity": _severity(score),
+        "reason": primary_reason,
+        "reasons": reasons,
+        "preview": preview,
+    }
+
+
+def _parse_getcap_line(line: str) -> tuple[Path, str] | None:
+    if " = " not in line:
+        return None
+
+    path_part, capabilities_part = line.split(" = ", 1)
+    path_part = path_part.strip()
+    capabilities_part = capabilities_part.strip()
+
+    if not path_part or not capabilities_part:
+        return None
+
+    return Path(path_part), capabilities_part
+
+
+def _extract_capability_names(capabilities_text: str) -> list[str]:
+    capability_names: list[str] = []
+
+    left_side = capabilities_text.split("+", 1)[0]
+    for chunk in left_side.split(","):
+        name = chunk.strip().lower()
+        if name:
+            capability_names.append(name)
+
+    return capability_names
+
+
+def _build_collect_record(path: Path, capabilities_text: str, hash_files: bool = False) -> dict[str, Any]:
+    record = {
+        "path": str(path),
+        "type": "artifact",
+        "exists": path.exists(),
+        "owner": "unknown",
+        "permissions": "unknown",
+        "capabilities": capabilities_text,
+    }
+
+    stat_info = _safe_stat(path)
+    if stat_info:
+        record["permissions"] = oct(stat_info.st_mode & 0o777)
+        record["owner"] = _owner_from_uid(stat_info.st_uid)
+
+    if hash_files and path.exists() and path.is_file():
+        try:
+            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            pass
+
+    return record
+
+
+def _safe_stat(path: Path):
+    try:
+        return path.stat()
+    except OSError:
+        return None
+
+
+def _owner_from_uid(uid: int) -> str:
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return str(uid)
+
+
+def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:
+    path_lower = path_value.lower()
+    return any(path_lower.startswith(prefix.lower()) for prefix in prefixes)
+
+
+def _record_hit(
+    hits: dict[str, dict[str, Any]],
+    reason: str,
+    score: int,
+    preview: str | None,
+    category: str,
+) -> None:
+    existing = hits.get(category)
+    if existing is None or score > int(existing["score"]):
+        hits[category] = {
+            "reason": reason,
+            "score": int(score),
+            "preview": preview,
+            "category": category,
+        }
+
+
+def _severity(score: int) -> str:
+    if score >= 140:
+        return "CRITICAL"
+    if score >= 90:
         return "HIGH"
     if score >= 50:
         return "MEDIUM"
