@@ -285,8 +285,6 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
 
-    link_target_raw = _readlink_safely(path)
-
     if _path_startswith_any(target_str, TEMP_PATH_PATTERNS):
         _record_hit(
             hits,
@@ -324,30 +322,17 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
                 category="nonstandard-target",
             )
 
-    if link_target_raw and ("../" in link_target_raw or "./" in link_target_raw):
+    stat_info = _safe_lstat(path)
+    if stat_info and stat_info.st_uid != 0:
+        owner_name = _owner_from_uid(stat_info.st_uid)
         _record_hit(
             hits,
-            reason="RC symlink uses relative traversal in its target",
-            score=25,
-            preview=f"readlink -> {link_target_raw}",
-            category="relative-link",
+            reason="RC symlink is owned by a non-root account",
+            score=70,
+            preview=f"owner={owner_name}",
+            category="ownership",
         )
 
-    stat_info = _safe_lstat(path)
-    if stat_info:
-        owner_name = _owner_from_uid(stat_info.st_uid)
-        mode = stat_info.st_mode & 0o777
-
-        if stat_info.st_uid != 0:
-            _record_hit(
-                hits,
-                reason="RC symlink is owned by a non-root account",
-                score=70,
-                preview=f"owner={owner_name}",
-                category="ownership",
-            )
-
-    _apply_compound_behavior_bonuses(hits)
     return _finalize_finding(path, hits)
 
 
@@ -374,7 +359,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
                 reason="Init artifact is world-writable",
                 score=95,
                 preview=f"mode={oct(mode)}",
-                category="permissions-world",
+                category="permissions",
             )
         elif mode & 0o020:
             _record_hit(
@@ -382,7 +367,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
                 reason="Init artifact is group-writable",
                 score=55,
                 preview=f"mode={oct(mode)}",
-                category="permissions-group",
+                category="permissions",
             )
 
     try:
@@ -398,7 +383,6 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
             preview="[binary content omitted]",
             category="binary",
         )
-        _apply_compound_behavior_bonuses(hits)
         return _finalize_finding(path, hits)
 
     try:
@@ -415,16 +399,9 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
 
         line_lower = stripped.lower()
 
+        # Keep the shebang as context only. Do not score it.
         if not shebang_seen and SHEBANG_REGEX.search(stripped):
             shebang_seen = True
-            # Very small score, mostly for context if paired with other behaviors.
-            _record_hit(
-                hits,
-                reason="Init artifact declares a shell interpreter",
-                score=0,
-                preview=_with_line_number(line_number, stripped),
-                category="shebang",
-            )
 
         comment_only = stripped.startswith("#") and not stripped.startswith("#!")
         if comment_only:
@@ -443,6 +420,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
         _detect_process_detach(hits, stripped, line_number)
 
     _apply_compound_behavior_bonuses(hits)
+
     return _finalize_finding(path, hits)
 
 
@@ -761,16 +739,28 @@ def _detect_stealth_or_privilege_changes(
     line: str,
     line_number: int,
 ) -> None:
+    line_lower = line.lower()
+
     for regex in STEALTH_PERSISTENCE_REGEXES:
         if regex.search(line):
+            # Suppress common benign chmod/chown style service housekeeping
+            if "chmod 755" in line_lower or "chmod 755 " in line_lower:
+                return
+            if "chmod 644" in line_lower or "chmod 644 " in line_lower:
+                return
+            if "chmod 600" in line_lower or "chmod 600 " in line_lower:
+                return
+            if "chown root:root" in line_lower:
+                return
+
             _record_hit(
                 hits,
                 reason="Init artifact contains stealth or privilege-manipulation logic",
-                score=75,
+                score=85,
                 preview=_with_line_number(line_number, line),
-                category="stealth",
+                category="stealth-privilege",
             )
-            break
+            return
 
 
 def _detect_process_detach(
@@ -865,23 +855,58 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     if not hits:
         return None
 
-    ordered_hits = sorted(
-        hits.values(),
-        key=lambda item: int(item.get("score", 0)),
-        reverse=True,
-    )
+    reasons = [entry["reason"] for entry in hits.values()]
+    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
+    categories = {entry["category"] for entry in hits.values()}
+    score = sum(int(entry["score"]) for entry in hits.values())
 
-    reasons = [str(item["reason"]) for item in ordered_hits]
-    total_score = sum(int(item.get("score", 0)) for item in ordered_hits)
-    top_preview = str(ordered_hits[0].get("preview", ""))
+    high_confidence_categories = {
+        "download-exec",
+        "reverse-shell",
+        "temp-exec",
+        "user-exec",
+        "decode-exec",
+        "ld-hijack",
+        "kernel-module-temp",
+        "nonstandard-target",
+        "temp-target",
+        "user-target",
+        "hidden-target",
+        "binary",
+        "ownership",
+        "permissions",
+    }
+
+    low_signal_only_categories = {
+        "shebang",
+        "relative-link",
+        "process-detach",
+    }
+
+    has_high_confidence = bool(categories & high_confidence_categories)
+    only_low_signal = categories and categories.issubset(low_signal_only_categories)
+
+    # Suppress weak/noisy findings
+    if only_low_signal and score < 80:
+        return None
+
+    if not has_high_confidence and score < 90 and len(categories) < 2:
+        return None
+
+    primary_reason = max(
+        hits.values(),
+        key=lambda entry: int(entry["score"]),
+    )["reason"]
+
+    preview = previews[0] if previews else None
 
     return {
         "path": str(path),
-        "score": total_score,
-        "severity": _severity(total_score),
-        "reason": reasons[0],
+        "score": score,
+        "severity": _severity(score),
+        "reason": primary_reason,
         "reasons": reasons,
-        "preview": top_preview,
+        "preview": preview,
     }
 
 
