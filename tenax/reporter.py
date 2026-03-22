@@ -232,29 +232,24 @@ def _render_analyze_finding(index: int, item: dict[str, Any]) -> list[str]:
     )
     lines.append(f"Path: {path_value}")
     lines.append(f"Score: {item.get('score', 0)}")
-    lines.append(f"Reason: {item.get('reason', 'No reason provided')}")
-
-    sources = item.get("sources")
-    if sources:
-        lines.append(f"Sources: {', '.join(_ensure_list_of_strings(sources))}")
 
     reasons = _ensure_list_of_strings(item.get("reasons"))
-    if len(reasons) > 1:
-        lines.append("All reasons:")
+    primary_reason = item.get("reason", "No reason provided")
+
+    if len(reasons) <= 1:
+        lines.append(f"Reason: {primary_reason}")
+    else:
+        lines.append("Reasons:")
         for reason in reasons:
             lines.append(f"  - {reason}")
+
+    sources = _ensure_list_of_strings(item.get("sources"))
+    if sources:
+        lines.append(f"Sources: {', '.join(sources)}")
 
     tags = _ensure_list_of_strings(item.get("tags"))
     if tags:
         lines.append(f"Tags: {', '.join(tags)}")
-
-    normalized_path = item.get("normalized_path")
-    if normalized_path and normalized_path != path_value:
-        lines.append(f"Normalized path: {normalized_path}")
-
-    path_variants = _ensure_list_of_strings(item.get("path_variants"))
-    if len(path_variants) > 1:
-        lines.append(f"Path variants: {', '.join(path_variants)}")
 
     dedupe_count = item.get("dedupe_count")
     if dedupe_count and int(dedupe_count) > 1:
@@ -263,8 +258,7 @@ def _render_analyze_finding(index: int, item: dict[str, Any]) -> list[str]:
     score_breakdown = item.get("score_breakdown", {})
     if score_breakdown:
         lines.append(
-            "Score breakdown: "
-            f"max={score_breakdown.get('max_score', 0)}, "
+            f"Score breakdown: max={score_breakdown.get('max_score', 0)}, "
             f"reasons={score_breakdown.get('reason_count', 0)}, "
             f"sources={score_breakdown.get('source_count', 0)}"
         )
