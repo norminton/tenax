@@ -22,10 +22,6 @@ from tenax.checks.systemd import analyze_systemd_locations
 from tenax.checks.tmp_paths import analyze_tmp_paths
 from tenax.reporter import output_results
 
-# ---------------------------------------------------------------------------
-# Module registry
-# ---------------------------------------------------------------------------
-
 MODULES: tuple[tuple[str, Callable[[], list[dict[str, Any]]]], ...] = (
     ("cron", analyze_cron_locations),
     ("systemd", analyze_systemd_locations),
@@ -44,7 +40,6 @@ MODULES: tuple[tuple[str, Callable[[], list[dict[str, Any]]]], ...] = (
     ("capabilities", analyze_capabilities),
 )
 
-# Higher value = higher precedence when picking a "primary" source for a merged hit.
 SOURCE_PRIORITY: dict[str, int] = {
     "systemd": 100,
     "ld_preload": 95,
@@ -126,19 +121,11 @@ SUSPICIOUS_KEYWORDS: dict[str, str] = {
     "podman": "container-hook",
 }
 
-# ---------------------------------------------------------------------------
-# Utility helpers
-# ---------------------------------------------------------------------------
-
 
 def _safe_invoke_module(
     source: str,
     func: Callable[[], list[dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """
-    Execute a module safely. Analyzer resilience matters: one failed module
-    should not kill the entire scan.
-    """
     start = time.perf_counter()
     try:
         results = func()
@@ -155,7 +142,7 @@ def _safe_invoke_module(
             "duration_ms": duration_ms,
             "finding_count": len(results),
         }
-    except Exception as exc:  # pragma: no cover - safety net
+    except Exception as exc:  # pragma: no cover
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         return [], {
             "source": source,
@@ -179,7 +166,6 @@ def _normalize_severity(value: Any, score: int) -> str:
         if candidate in SEVERITY_RANK:
             return candidate
 
-    # Fallback mapping for modules that are inconsistent or omit severity.
     if score >= 90:
         return "CRITICAL"
     if score >= 70:
@@ -200,8 +186,6 @@ def _normalize_path(path_value: Any) -> str | None:
         return None
 
     try:
-        # resolve(strict=False) normalizes symlink-like and relative segments
-        # without requiring the target to exist.
         return str(Path(path_str).expanduser().resolve(strict=False))
     except Exception:
         return path_str
@@ -257,7 +241,6 @@ def _derive_tags(
     tags: set[str] = set()
     combined = f"{reason}\n{preview}\n{path_value or ''}".lower()
 
-    # Source-derived tags
     tags.add(source.replace("_", "-"))
 
     if source in {"systemd", "pam", "sudoers", "ld_preload"}:
@@ -267,7 +250,6 @@ def _derive_tags(
     if source in {"ssh", "shell_profiles", "autostart_hooks", "environment_hooks"}:
         tags.add("user-persistence")
 
-    # Path-derived tags
     if path_value:
         path_lower = path_value.lower()
 
@@ -277,7 +259,7 @@ def _derive_tags(
             tags.add("service-definition")
         if path_lower.endswith("authorized_keys"):
             tags.update({"ssh-persistence", "credential-surface"})
-        if path_lower.endswith((".desktop",)):
+        if path_lower.endswith(".desktop"):
             tags.add("autostart-entry")
         if _contains_any(path_lower, USER_SCOPE_MARKERS):
             tags.add("user-scope")
@@ -288,7 +270,6 @@ def _derive_tags(
         if path_lower.endswith((".service", ".timer", ".socket", ".mount", ".path", ".target")):
             tags.add("systemd-unit")
 
-    # Content-derived tags
     for keyword, tag in SUSPICIOUS_KEYWORDS.items():
         if keyword in combined:
             tags.add(tag)
@@ -341,13 +322,6 @@ def _enrich_result(source: str, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    Consolidate related findings centrally without requiring module changes.
-
-    Merge strategy:
-    - Prefer grouping on normalized path when available.
-    - Fall back to (source, reason, preview) for pathless findings.
-    """
     merged: dict[str, dict[str, Any]] = {}
 
     for item in findings:
@@ -375,7 +349,6 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
 
         current = merged[key]
-
         current["dedupe_count"] += 1
         current["sources"] = sorted(
             set(_ensure_list_of_strings(current.get("sources"))) | {source}
@@ -400,7 +373,6 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 | {str(item.get("path"))}
             )
 
-        # Preserve strongest score and best supporting context.
         if _coerce_score(item.get("score", 0)) > _coerce_score(current.get("score", 0)):
             current["score"] = _coerce_score(item.get("score", 0))
             current["reason"] = reason
@@ -409,7 +381,6 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if item.get("path"):
                 current["path"] = item["path"]
 
-        # If we don't yet have a preview, opportunistically take one.
         if not current.get("preview") and item.get("preview"):
             current["preview"] = item["preview"]
 
@@ -443,25 +414,50 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             },
             "normalized_path": item.get("normalized_path"),
         }
-
         consolidated.append(consolidated_item)
 
     return consolidated
 
 
-def _sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
+def _sort_key(item: dict[str, Any], sort_by: str = "score") -> tuple[Any, ...]:
     score = _coerce_score(item.get("score", 0))
     severity_rank = SEVERITY_RANK.get(str(item.get("severity", "INFO")), 0)
     source_priority = SOURCE_PRIORITY.get(str(item.get("source", "unknown")), 0)
     tags = set(_ensure_list_of_strings(item.get("tags")))
     path_value = str(item.get("path", "") or "").lower()
+    source = str(item.get("source", "unknown")).lower()
 
     temp_bias = 1 if "temp-path" in tags else 0
     writable_bias = 1 if "writable" in tags or "world-writable" in tags else 0
     root_exec_bias = 1 if "root-execution" in tags else 0
     multi_reason_bias = len(_ensure_list_of_strings(item.get("reasons")))
 
-    # Descending for first six values, ascending lexical for final path value.
+    if sort_by == "severity":
+        return (
+            severity_rank,
+            score,
+            root_exec_bias,
+            writable_bias,
+            temp_bias,
+            multi_reason_bias,
+            source_priority,
+            path_value,
+        )
+    if sort_by == "path":
+        return (
+            path_value,
+            score,
+            severity_rank,
+            source_priority,
+        )
+    if sort_by == "source":
+        return (
+            source,
+            score,
+            severity_rank,
+            path_value,
+        )
+
     return (
         score,
         severity_rank,
@@ -568,47 +564,154 @@ def _print_module_summary(summary: dict[str, Any]) -> None:
     print("")
 
 
-def run_analysis(output_path=None, output_format: str = "text", top: int = 20) -> None:
-    """
-    Run Tenax analysis with centralized enrichment and triage-oriented ranking.
+def _matches_source_filter(item: dict[str, Any], allowed_sources: set[str] | None) -> bool:
+    if not allowed_sources:
+        return True
+    item_sources = {
+        source.strip().lower()
+        for source in _ensure_list_of_strings(item.get("sources") or item.get("source"))
+    }
+    return bool(item_sources & allowed_sources)
 
-    Backward compatibility:
-    - Preserves existing function signature.
-    - Continues to emit findings through tenax.reporter.output_results().
-    - Avoids requiring changes to individual check modules.
-    """
+
+def _matches_severity_filter(item: dict[str, Any], minimum_severity: str | None) -> bool:
+    if not minimum_severity:
+        return True
+    threshold = SEVERITY_RANK[minimum_severity]
+    item_rank = SEVERITY_RANK.get(str(item.get("severity", "INFO")), 0)
+    return item_rank >= threshold
+
+
+def _matches_path_filter(item: dict[str, Any], path_contains: str | None) -> bool:
+    if not path_contains:
+        return True
+    needle = path_contains.lower()
+    path_value = str(item.get("path", "") or "").lower()
+    normalized_path = str(item.get("normalized_path", "") or "").lower()
+    return needle in path_value or needle in normalized_path
+
+
+def _matches_writable_filter(item: dict[str, Any], only_writable: bool) -> bool:
+    if not only_writable:
+        return True
+    tags = set(_ensure_list_of_strings(item.get("tags")))
+    return bool({"writable", "world-writable", "group-writable"} & tags)
+
+
+def _matches_existing_filter(item: dict[str, Any], only_existing: bool) -> bool:
+    if not only_existing:
+        return True
+    path_value = item.get("path")
+    if not path_value:
+        return False
+    try:
+        return Path(str(path_value)).expanduser().exists()
+    except OSError:
+        return False
+
+
+def _matches_scope_filter(item: dict[str, Any], scope: str | None) -> bool:
+    if not scope:
+        return True
+    tags = set(_ensure_list_of_strings(item.get("tags")))
+    if scope == "user":
+        return "user-scope" in tags
+    if scope == "system":
+        return "system-scope" in tags
+    return True
+
+
+def _apply_filters(
+    findings: list[dict[str, Any]],
+    severity: str | None = None,
+    sources: list[str] | None = None,
+    path_contains: str | None = None,
+    only_writable: bool = False,
+    only_existing: bool = False,
+    scope: str | None = None,
+) -> list[dict[str, Any]]:
+    allowed_sources = {source.strip().lower() for source in (sources or []) if source.strip()}
+    minimum_severity = severity.upper() if severity else None
+
+    filtered: list[dict[str, Any]] = []
+    for item in findings:
+        if not _matches_source_filter(item, allowed_sources):
+            continue
+        if not _matches_severity_filter(item, minimum_severity):
+            continue
+        if not _matches_path_filter(item, path_contains):
+            continue
+        if not _matches_writable_filter(item, only_writable):
+            continue
+        if not _matches_existing_filter(item, only_existing):
+            continue
+        if not _matches_scope_filter(item, scope):
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def run_analysis(
+    output_path=None,
+    output_format: str = "text",
+    top: int = 20,
+    severity: str | None = None,
+    sources: list[str] | None = None,
+    path_contains: str | None = None,
+    only_writable: bool = False,
+    only_existing: bool = False,
+    scope: str | None = None,
+    sort_by: str = "score",
+    quiet: bool = False,
+    verbose: bool = False,
+) -> None:
     started_at = time.perf_counter()
 
     raw_findings: list[dict[str, Any]] = []
     module_status: list[dict[str, Any]] = []
 
-    # Execute modules safely and enrich results centrally.
     for source, func in MODULES:
         results, status = _safe_invoke_module(source, func)
         if status:
             module_status.append(status)
+            if verbose and not quiet:
+                status_line = (
+                    f"[module] {source}: status={status['status']} "
+                    f"findings={status['finding_count']} duration_ms={status['duration_ms']}"
+                )
+                if status.get("error"):
+                    status_line += f" error={status['error']}"
+                print(status_line)
 
         for item in results:
             if not isinstance(item, dict):
-                # Defensive: ignore malformed entries rather than crashing analysis.
                 continue
             raw_findings.append(_enrich_result(source, item))
 
-    # Collapse duplicates and multi-source overlaps.
     consolidated_findings = _merge_findings(raw_findings)
 
-    # Normalize severities again after merge in case combined context changed.
     for item in consolidated_findings:
         item["score"] = _coerce_score(item.get("score", 0))
         item["severity"] = _normalize_severity(item.get("severity"), item["score"])
 
-    # Stronger central ranking.
-    consolidated_findings.sort(key=_sort_key, reverse=True)
+    consolidated_findings = _apply_filters(
+        findings=consolidated_findings,
+        severity=severity,
+        sources=sources,
+        path_contains=path_contains,
+        only_writable=only_writable,
+        only_existing=only_existing,
+        scope=scope,
+    )
 
-    # Stable finding IDs after final ordering.
+    reverse_sort = sort_by != "path"
+    consolidated_findings.sort(
+        key=lambda item: _sort_key(item, sort_by=sort_by),
+        reverse=reverse_sort,
+    )
+
     _assign_finding_ids(consolidated_findings)
 
-    # Limit after dedupe / ranking, not before.
     if top is not None and top >= 0:
         consolidated_findings = consolidated_findings[:top]
 
@@ -619,23 +722,28 @@ def run_analysis(output_path=None, output_format: str = "text", top: int = 20) -
         started_at=started_at,
     )
 
-    _print_module_summary(summary)
+    metadata = {
+        "mode": "analyze",
+        "filters": {
+            "severity": severity,
+            "sources": sources or [],
+            "path_contains": path_contains,
+            "only_writable": only_writable,
+            "only_existing": only_existing,
+            "scope": scope,
+            "sort_by": sort_by,
+            "top": top,
+        },
+        "summary": summary,
+    }
 
-    # Attach summary metadata to every finding so JSON output already carries it,
-    # even before reporter.py is upgraded.
-    for item in consolidated_findings:
-        item["analysis_summary"] = {
-            "module_count": summary["module_count"],
-            "module_success_count": summary["module_success_count"],
-            "module_error_count": summary["module_error_count"],
-            "raw_finding_count": summary["raw_finding_count"],
-            "consolidated_finding_count": summary["consolidated_finding_count"],
-            "analysis_duration_ms": summary["analysis_duration_ms"],
-        }
+    if not quiet:
+        _print_module_summary(summary)
 
     output_results(
         mode="analyze",
         results=consolidated_findings,
         output_format=output_format,
         output_path=output_path,
+        metadata=metadata,
     )
