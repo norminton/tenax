@@ -89,7 +89,7 @@ def _render_analyze_text(
     summary = metadata.get("summary", {})
     filters = metadata.get("filters", {})
 
-    if summary:
+     if summary and not metadata.get("quiet", False):
         lines.extend(_render_summary_block(summary))
         lines.append("")
 

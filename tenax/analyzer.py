@@ -724,6 +724,7 @@ def run_analysis(
 
     metadata = {
         "mode": "analyze",
+        "quiet": quiet,
         "filters": {
             "severity": severity,
             "sources": sources or [],
@@ -736,8 +737,6 @@ def run_analysis(
         },
         "summary": summary,
     }
-
-
 
     output_results(
         mode="analyze",
