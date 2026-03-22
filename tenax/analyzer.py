@@ -737,8 +737,7 @@ def run_analysis(
         "summary": summary,
     }
 
-    if not quiet:
-        _print_module_summary(summary)
+
 
     output_results(
         mode="analyze",
