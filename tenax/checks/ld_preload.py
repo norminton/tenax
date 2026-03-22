@@ -1,189 +1,497 @@
+from __future__ import annotations
+
+import hashlib
+import pwd
+import re
 from pathlib import Path
+from typing import Any
 
-from tenax.utils import (
-    get_file_owner,
-    get_file_permissions,
-    is_file_safe,
-    path_exists,
-    sha256_file,
-)
-
+from tenax.utils import is_file_safe, path_exists
 
 LD_PRELOAD_PATHS = [
     Path("/etc/ld.so.preload"),
     Path("/etc/ld.so.conf"),
     Path("/etc/ld.so.conf.d"),
+    Path.home() / ".bashrc",
+    Path.home() / ".profile",
+    Path.home() / ".zshrc",
 ]
 
-SUSPICIOUS_LIBRARY_PATHS = [
+TEMP_PATH_PATTERNS = (
     "/tmp/",
     "/var/tmp/",
     "/dev/shm/",
-    "/home/",
-]
+    "/run/shm/",
+)
 
-SUSPICIOUS_KEYWORDS = [
-    "LD_PRELOAD",
-    ".so",
-    "/tmp/",
-    "/var/tmp/",
-    "/dev/shm/",
-]
+USER_PATH_REGEX = re.compile(
+    r"(/home/[^/\s]+/|/root/\.|/root/\.local/|/root/\.cache/)",
+    re.IGNORECASE,
+)
+
+HIDDEN_PATH_REGEX = re.compile(
+    r"""
+    (
+        /tmp/|/var/tmp/|/dev/shm/|/run/shm/|
+        /home/[^/\s]+/|/root/
+    )
+    \.[^/\s'"]+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+LD_PRELOAD_REGEX = re.compile(
+    r"\bLD_PRELOAD\s*=\s*['\"]?([^'\"\s]+)",
+    re.IGNORECASE,
+)
+
+LD_LIBRARY_PATH_REGEX = re.compile(
+    r"\bLD_LIBRARY_PATH\s*=\s*['\"]?([^'\"\n]+)",
+    re.IGNORECASE,
+)
+
+SHARED_OBJECT_REGEX = re.compile(
+    r"/[^\s'\";|]+\.so(?:\.\d+)*",
+    re.IGNORECASE,
+)
+
+SUSPICIOUS_SO_NAME_REGEX = re.compile(
+    r"""
+    (
+        \.so\.(bak|old|tmp|test|hidden) |
+        lib\w*inject\w*\.so |
+        lib\w*hijack\w*\.so |
+        lib\w*hook\w*\.so
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
-def analyze_ld_preload_locations() -> list[dict]:
-    findings = []
+def analyze_ld_preload_locations() -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
 
-    for target_path in LD_PRELOAD_PATHS:
-        if not path_exists(target_path):
+    for base in LD_PRELOAD_PATHS:
+        if not path_exists(base):
             continue
 
-        if is_file_safe(target_path):
-            findings.extend(_analyze_ld_file(target_path))
-        elif target_path.is_dir():
-            for child in _safe_iterdir(target_path):
-                if is_file_safe(child):
-                    findings.extend(_analyze_ld_file(child))
+        if base.is_dir():
+            for child in base.iterdir():
+                child_str = str(child)
+                if child_str in seen_paths:
+                    continue
+                seen_paths.add(child_str)
+
+                if not is_file_safe(child):
+                    continue
+
+                finding = _analyze_artifact(child)
+                if finding:
+                    findings.append(finding)
+        else:
+            base_str = str(base)
+            if base_str in seen_paths:
+                continue
+            seen_paths.add(base_str)
+
+            if is_file_safe(base):
+                finding = _analyze_artifact(base)
+                if finding:
+                    findings.append(finding)
 
     return findings
 
 
-def collect_ld_preload_locations(hash_files: bool = False) -> list[dict]:
-    artifacts = []
+def collect_ld_preload_locations(hash_files: bool = False) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
 
-    for target_path in LD_PRELOAD_PATHS:
-        exists = path_exists(target_path)
-        is_file = is_file_safe(target_path)
+    for base in LD_PRELOAD_PATHS:
+        if not path_exists(base):
+            continue
 
-        artifacts.append(
-            {
-                "path": str(target_path),
-                "type": "ld-preload-location",
-                "exists": exists,
-                "owner": get_file_owner(target_path) if exists else "unknown",
-                "permissions": get_file_permissions(target_path) if exists else "unknown",
-                "sha256": sha256_file(target_path) if hash_files and exists and is_file else None,
-            }
-        )
+        if base.is_dir():
+            for child in base.iterdir():
+                child_str = str(child)
+                if child_str in seen_paths:
+                    continue
+                seen_paths.add(child_str)
 
-        if exists and target_path.is_dir():
-            for child in _safe_iterdir(target_path):
-                child_exists = path_exists(child)
-                child_is_file = is_file_safe(child)
+                if not is_file_safe(child):
+                    continue
+                artifacts.append(_build_collect_record(child, hash_files))
+        else:
+            base_str = str(base)
+            if base_str in seen_paths:
+                continue
+            seen_paths.add(base_str)
 
-                artifacts.append(
-                    {
-                        "path": str(child),
-                        "type": "ld-preload-artifact",
-                        "exists": child_exists,
-                        "owner": get_file_owner(child) if child_exists else "unknown",
-                        "permissions": get_file_permissions(child) if child_exists else "unknown",
-                        "sha256": sha256_file(child) if hash_files and child_exists and child_is_file else None,
-                    }
-                )
+            if is_file_safe(base):
+                artifacts.append(_build_collect_record(base, hash_files))
 
     return artifacts
 
 
-def _analyze_ld_file(path: Path) -> list[dict]:
-    findings = []
+def _analyze_artifact(path: Path) -> dict[str, Any] | None:
+    if path.is_symlink():
+        return _analyze_symlink(path)
+    if path.is_file():
+        return _analyze_file(path)
+    return None
+
+
+def _analyze_symlink(path: Path) -> dict[str, Any] | None:
+    hits: dict[str, dict[str, Any]] = {}
 
     try:
-        content = path.read_text(encoding="utf-8", errors="ignore")
-    except PermissionError:
-        findings.append(
-            {
-                "path": str(path),
-                "score": 0,
-                "severity": "INFO",
-                "reason": "File exists but could not be read due to permissions",
-                "preview": "<unreadable due to permissions>",
-            }
+        target = path.resolve(strict=False)
+        target_str = str(target)
+    except Exception:
+        return None
+
+    if _path_startswith_any(target_str, TEMP_PATH_PATTERNS):
+        _record_hit(
+            hits,
+            reason="LD preload configuration symlink points to a temporary path",
+            score=95,
+            preview=f"symlink -> {target_str}",
+            category="temp-target",
         )
-        return findings
-    except OSError:
-        return findings
 
-    score = 0
-    reasons = []
-    preview_line = None
+    if USER_PATH_REGEX.search(target_str):
+        _record_hit(
+            hits,
+            reason="LD preload configuration symlink points to a user-controlled path",
+            score=90,
+            preview=f"symlink -> {target_str}",
+            category="user-target",
+        )
 
-    for line in content.splitlines():
-        stripped = line.strip()
+    if HIDDEN_PATH_REGEX.search(target_str):
+        _record_hit(
+            hits,
+            reason="LD preload configuration symlink points to a hidden path",
+            score=85,
+            preview=f"symlink -> {target_str}",
+            category="hidden-target",
+        )
 
+    return _finalize_finding(path, hits)
+
+
+def _analyze_file(path: Path) -> dict[str, Any] | None:
+    hits: dict[str, dict[str, Any]] = {}
+
+    stat_info = _safe_stat(path)
+    if stat_info:
+        mode = stat_info.st_mode & 0o777
+
+        if stat_info.st_uid != 0:
+            _record_hit(
+                hits,
+                reason="LD preload configuration is owned by a non-root account",
+                score=90,
+                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
+                category="ownership",
+            )
+
+        if mode & 0o002:
+            _record_hit(
+                hits,
+                reason="LD preload configuration is world-writable",
+                score=100,
+                preview=f"mode={oct(mode)}",
+                category="permissions",
+            )
+
+    try:
+        content = path.read_text(errors="ignore")
+    except Exception:
+        return _finalize_finding(path, hits)
+
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
 
-        for keyword in SUSPICIOUS_KEYWORDS:
-            if keyword in stripped:
-                if preview_line is None:
-                    preview_line = stripped
-                score += 10
-                reasons.append(f"Contains loader-related keyword: {keyword}")
+        _detect_ld_preload(hits, stripped, line_number)
+        _detect_ld_library_path(hits, stripped, line_number)
 
-        if ".so" in stripped:
-            if preview_line is None:
-                preview_line = stripped
-            score += 20
-            reasons.append("References shared object library")
+    return _finalize_finding(path, hits)\
 
-        for bad_path in SUSPICIOUS_LIBRARY_PATHS:
-            if bad_path in stripped:
-                if preview_line is None:
-                    preview_line = stripped
-                score += 40
-                reasons.append(f"References library in suspicious path: {bad_path}")
+def _detect_ld_preload(
+    hits: dict[str, dict[str, Any]],
+    line: str,
+    line_number: int,
+) -> None:
+    match = LD_PRELOAD_REGEX.search(line)
+    if not match:
+        return
 
-        if stripped.startswith("include "):
-            if preview_line is None:
-                preview_line = stripped
-            score += 5
-            reasons.append("Uses include directive in loader config")
+    value = match.group(1).strip()
+    value_lower = value.lower()
 
-    perms = get_file_permissions(path)
-    if "w" in perms[5:] or "w" in perms[8:]:
-        score += 15
-        reasons.append("Group/Other write permissions on loader file")
+    _record_hit(
+        hits,
+        reason="LD_PRELOAD is explicitly defined",
+        score=35,
+        preview=_with_line_number(line_number, line),
+        category="ld-preload",
+    )
 
-    if path.name.startswith("."):
-        score += 10
-        reasons.append("Hidden loader-related file name")
+    _analyze_library_path_value(hits, value, value_lower, line, line_number, "LD_PRELOAD")
 
-    if score > 0:
-        findings.append(
-            {
-                "path": str(path),
-                "score": score,
-                "severity": _severity_from_score(score),
-                "reason": "; ".join(_dedupe(reasons)),
-                "preview": preview_line,
-            }
+
+def _detect_ld_library_path(
+    hits: dict[str, dict[str, Any]],
+    line: str,
+    line_number: int,
+) -> None:
+    match = LD_LIBRARY_PATH_REGEX.search(line)
+    if not match:
+        return
+
+    value = match.group(1).strip()
+    value_lower = value.lower()
+
+    _record_hit(
+        hits,
+        reason="LD_LIBRARY_PATH is explicitly defined",
+        score=20,
+        preview=_with_line_number(line_number, line),
+        category="ld-library-path",
+    )
+
+    for part in [p.strip() for p in value.split(":") if p.strip()]:
+        _analyze_library_path_value(
+            hits,
+            part,
+            part.lower(),
+            line,
+            line_number,
+            "LD_LIBRARY_PATH",
         )
 
-    return findings
+
+def _analyze_library_path_value(
+    hits: dict[str, dict[str, Any]],
+    value: str,
+    value_lower: str,
+    line: str,
+    line_number: int,
+    variable_name: str,
+) -> None:
+    if _path_startswith_any(value_lower, TEMP_PATH_PATTERNS):
+        _record_hit(
+            hits,
+            reason=f"{variable_name} points to a temporary path",
+            score=95,
+            preview=_with_line_number(line_number, line),
+            category="temp-library-path",
+        )
+
+    if USER_PATH_REGEX.search(value):
+        _record_hit(
+            hits,
+            reason=f"{variable_name} points to a user-controlled path",
+            score=90,
+            preview=_with_line_number(line_number, line),
+            category="user-library-path",
+        )
+
+    if HIDDEN_PATH_REGEX.search(value):
+        _record_hit(
+            hits,
+            reason=f"{variable_name} points to a hidden path",
+            score=85,
+            preview=_with_line_number(line_number, line),
+            category="hidden-library-path",
+        )
+
+    if SHARED_OBJECT_REGEX.search(value):
+        _record_hit(
+            hits,
+            reason=f"{variable_name} references a shared object directly",
+            score=50,
+            preview=_with_line_number(line_number, line),
+            category="direct-so-reference",
+        )
+
+    if SUSPICIOUS_SO_NAME_REGEX.search(value):
+        _record_hit(
+            hits,
+            reason=f"{variable_name} references a suspicious shared object name",
+            score=80,
+            preview=_with_line_number(line_number, line),
+            category="suspicious-so-name",
+        )
 
 
-def _safe_iterdir(path: Path) -> list[Path]:
+def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
+    categories = {entry["category"] for entry in hits.values()}
+
+    if "ld-preload" in categories and any(
+        category in {"temp-library-path", "user-library-path", "hidden-library-path"}
+        for category in categories
+    ):
+        _record_hit(
+            hits,
+            reason="LD_PRELOAD is combined with a high-risk library path",
+            score=35,
+            preview=None,
+            category="compound-preload-risk-path",
+        )
+
+    if "ld-preload" in categories and "direct-so-reference" in categories:
+        _record_hit(
+            hits,
+            reason="LD_PRELOAD directly references a shared object for forced library injection",
+            score=30,
+            preview=None,
+            category="compound-preload-direct-so",
+        )
+
+    if "direct-so-reference" in categories and "suspicious-so-name" in categories:
+        _record_hit(
+            hits,
+            reason="Shared object reference uses a suspicious library naming pattern",
+            score=25,
+            preview=None,
+            category="compound-suspicious-so",
+        )
+
+
+def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    if not hits:
+        return None
+
+    reasons = [entry["reason"] for entry in hits.values()]
+    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
+    categories = {entry["category"] for entry in hits.values()}
+    score = sum(int(entry["score"]) for entry in hits.values())
+
+    high_confidence_categories = {
+        "temp-target",
+        "user-target",
+        "hidden-target",
+        "ownership",
+        "permissions",
+        "temp-library-path",
+        "user-library-path",
+        "hidden-library-path",
+        "suspicious-so-name",
+        "compound-preload-risk-path",
+        "compound-preload-direct-so",
+        "compound-suspicious-so",
+    }
+
+    low_signal_only_categories = {
+        "ld-preload",
+        "ld-library-path",
+        "direct-so-reference",
+    }
+
+    has_high_confidence = bool(categories & high_confidence_categories)
+    only_low_signal = categories and categories.issubset(low_signal_only_categories)
+
+    if only_low_signal and score < 90:
+        return None
+
+    if not has_high_confidence and score < 95 and len(categories) < 2:
+        return None
+
+    primary_reason = max(
+        hits.values(),
+        key=lambda entry: int(entry["score"]),
+    )["reason"]
+
+    preview = previews[0] if previews else None
+
+    return {
+        "path": str(path),
+        "score": score,
+        "severity": _severity(score),
+        "reason": primary_reason,
+        "reasons": reasons,
+        "preview": preview,
+    }
+
+
+def _record_hit(
+    hits: dict[str, dict[str, Any]],
+    reason: str,
+    score: int,
+    preview: str | None,
+    category: str,
+) -> None:
+    existing = hits.get(category)
+    if existing is None or score > int(existing["score"]):
+        hits[category] = {
+            "reason": reason,
+            "score": int(score),
+            "preview": preview,
+            "category": category,
+        }
+
+
+def _build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
+    record = {
+        "path": str(path),
+        "type": "artifact",
+        "exists": path.exists(),
+        "owner": "unknown",
+        "permissions": "unknown",
+    }
+
     try:
-        return list(path.iterdir())
-    except (PermissionError, OSError):
-        return []
+        stat_info = path.lstat() if path.is_symlink() else path.stat()
+        record["permissions"] = oct(stat_info.st_mode & 0o777)
+    except Exception:
+        pass
+
+    try:
+        stat_info = path.lstat() if path.is_symlink() else path.stat()
+        record["owner"] = pwd.getpwuid(stat_info.st_uid).pw_name
+    except Exception:
+        pass
+
+    if hash_files and path.exists() and path.is_file() and not path.is_symlink():
+        try:
+            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except Exception:
+            pass
+
+    return record
 
 
-def _dedupe(items: list[str]) -> list[str]:
-    seen = set()
-    ordered = []
-
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            ordered.append(item)
-
-    return ordered
+def _safe_stat(path: Path):
+    try:
+        return path.stat()
+    except Exception:
+        return None
 
 
-def _severity_from_score(score: int) -> str:
-    if score >= 80:
+def _owner_from_uid(uid: int) -> str:
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return str(uid)
+
+
+def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:
+    path_lower = path_value.lower()
+    return any(path_lower.startswith(prefix.lower()) for prefix in prefixes)
+
+
+def _with_line_number(line_number: int, line: str) -> str:
+    return f"line {line_number}: {line.strip()}"
+
+
+def _severity(score: int) -> str:
+    if score >= 140:
+        return "CRITICAL"
+    if score >= 90:
         return "HIGH"
     if score >= 50:
         return "MEDIUM"
