@@ -347,23 +347,6 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
                 category="ownership",
             )
 
-        if mode & 0o002:
-            _record_hit(
-                hits,
-                reason="RC symlink permissions are world-writable",
-                score=95,
-                preview=f"mode={oct(mode)}",
-                category="permissions-world",
-            )
-        elif mode & 0o020:
-            _record_hit(
-                hits,
-                reason="RC symlink permissions are group-writable",
-                score=55,
-                preview=f"mode={oct(mode)}",
-                category="permissions-group",
-            )
-
     _apply_compound_behavior_bonuses(hits)
     return _finalize_finding(path, hits)
 
@@ -438,7 +421,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
             _record_hit(
                 hits,
                 reason="Init artifact declares a shell interpreter",
-                score=5,
+                score=0,
                 preview=_with_line_number(line_number, stripped),
                 category="shebang",
             )
