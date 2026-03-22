@@ -327,19 +327,24 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in findings:
         normalized_path = item.get("normalized_path")
         source = str(item.get("source", "unknown"))
-        reason = str(item.get("reason", "No reason provided"))
+
+        item_reason = str(item.get("reason", "No reason provided"))
+        item_reasons = _ensure_list_of_strings(item.get("reasons"))
+        if not item_reasons:
+            item_reasons = [item_reason]
+
         preview = str(item.get("preview", ""))
 
         if normalized_path:
             key = f"path::{normalized_path}"
         else:
-            key = f"fallback::{source}::{reason}::{preview}"
+            key = f"fallback::{source}::{item_reason}::{preview}"
 
         if key not in merged:
             merged[key] = {
                 **item,
                 "sources": [source],
-                "reasons": [reason],
+                "reasons": item_reasons[:],
                 "tags": _ensure_list_of_strings(item.get("tags")),
                 "severity_candidates": [str(item.get("severity", "INFO"))],
                 "raw_scores": [_coerce_score(item.get("score", 0))],
@@ -354,7 +359,8 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             set(_ensure_list_of_strings(current.get("sources"))) | {source}
         )
         current["reasons"] = sorted(
-            set(_ensure_list_of_strings(current.get("reasons"))) | {reason}
+            set(_ensure_list_of_strings(current.get("reasons")))
+            | set(item_reasons)
         )
         current["tags"] = sorted(
             set(_ensure_list_of_strings(current.get("tags")))
@@ -375,7 +381,7 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         if _coerce_score(item.get("score", 0)) > _coerce_score(current.get("score", 0)):
             current["score"] = _coerce_score(item.get("score", 0))
-            current["reason"] = reason
+            current["reason"] = item_reason
             if item.get("preview"):
                 current["preview"] = item["preview"]
             if item.get("path"):
