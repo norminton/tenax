@@ -487,48 +487,57 @@ def _assign_finding_ids(findings: list[dict[str, Any]]) -> None:
 def _build_summary(
     raw_findings: list[dict[str, Any]],
     consolidated_findings: list[dict[str, Any]],
+    filtered_findings: list[dict[str, Any]],
+    displayed_findings: list[dict[str, Any]],
     module_status: list[dict[str, Any]],
     started_at: float,
 ) -> dict[str, Any]:
-    severity_counts = Counter(
-        str(item.get("severity", "INFO")) for item in consolidated_findings
+    elapsed_ms = round((perf_counter() - started_at) * 1000, 2)
+
+    severity_counter = Counter(
+        str(item.get("severity", "INFO")).upper() for item in filtered_findings
     )
-    source_counts = Counter(str(item.get("source", "unknown")) for item in consolidated_findings)
-    tag_counts = Counter(
-        tag for item in consolidated_findings for tag in _ensure_list_of_strings(item.get("tags"))
-    )
+    source_counter = Counter(str(item.get("source", "unknown")) for item in filtered_findings)
+
+    tag_counter: Counter[str] = Counter()
+    for item in filtered_findings:
+        for tag in _ensure_list_of_strings(item.get("tags")):
+            tag_counter[tag] += 1
 
     unique_paths = {
-        item.get("normalized_path")
-        for item in consolidated_findings
-        if item.get("normalized_path")
+        str(item.get("normalized_path") or item.get("path"))
+        for item in filtered_findings
+        if item.get("normalized_path") or item.get("path")
     }
 
-    temp_hits = sum(
-        1
-        for item in consolidated_findings
-        if "temp-path" in set(_ensure_list_of_strings(item.get("tags")))
-    )
+    temp_path_findings = 0
+    for item in filtered_findings:
+        path_value = str(item.get("path", "")).lower()
+        if any(token in path_value for token in ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/shm/")):
+            temp_path_findings += 1
 
-    errored_modules = [entry for entry in module_status if entry.get("status") == "error"]
-    ok_modules = [entry for entry in module_status if entry.get("status") == "ok"]
+    errored_modules = [entry for entry in module_status if not entry.get("ok")]
+    module_success_count = len([entry for entry in module_status if entry.get("ok")])
 
     return {
-        "generated_epoch": round(time.time(), 3),
-        "analysis_duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+        "module_success_count": module_success_count,
         "module_count": len(module_status),
-        "module_success_count": len(ok_modules),
         "module_error_count": len(errored_modules),
+        "errored_modules": errored_modules,
         "raw_finding_count": len(raw_findings),
         "consolidated_finding_count": len(consolidated_findings),
+        "filtered_finding_count": len(filtered_findings),
+        "displayed_finding_count": len(displayed_findings),
         "deduplicated_count": max(len(raw_findings) - len(consolidated_findings), 0),
         "unique_path_count": len(unique_paths),
-        "temp_path_finding_count": temp_hits,
-        "severity_counts": dict(sorted(severity_counts.items())),
-        "source_counts": dict(source_counts.most_common()),
-        "top_tags": dict(tag_counts.most_common(10)),
-        "module_status": module_status,
-        "errored_modules": errored_modules,
+        "temp_path_finding_count": temp_path_findings,
+        "analysis_duration_ms": elapsed_ms,
+        "severity_counts": {
+            sev: severity_counter.get(sev, 0)
+            for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+        },
+        "source_counts": dict(source_counter.most_common(8)),
+        "top_tags": dict(tag_counter.most_common(10)),
     }
 
 
@@ -658,9 +667,9 @@ def _apply_filters(
 
 
 def run_analysis(
-    output_path=None,
+    output_path: str | None = None,
     output_format: str = "text",
-    top: int = 20,
+    top: int = 5,
     severity: str | None = None,
     sources: list[str] | None = None,
     path_contains: str | None = None,
@@ -671,37 +680,48 @@ def run_analysis(
     quiet: bool = False,
     verbose: bool = False,
 ) -> None:
-    started_at = time.perf_counter()
+    started_at = perf_counter()
 
     raw_findings: list[dict[str, Any]] = []
     module_status: list[dict[str, Any]] = []
 
-    for source, func in MODULES:
-        results, status = _safe_invoke_module(source, func)
-        if status:
-            module_status.append(status)
-            if verbose and not quiet:
-                status_line = (
-                    f"[module] {source}: status={status['status']} "
-                    f"findings={status['finding_count']} duration_ms={status['duration_ms']}"
-                )
-                if status.get("error"):
-                    status_line += f" error={status['error']}"
-                print(status_line)
+    selected_sources = sources or list(ANALYZE_SOURCES.keys())
 
-        for item in results:
-            if not isinstance(item, dict):
-                continue
-            raw_findings.append(_enrich_result(source, item))
+    for source_name in selected_sources:
+        analyze_func = ANALYZE_SOURCES.get(source_name)
+        if not analyze_func:
+            module_status.append(
+                {
+                    "source": source_name,
+                    "ok": False,
+                    "error": "Unknown source",
+                }
+            )
+            continue
+
+        try:
+            findings = analyze_func() or []
+            enriched = [_enrich_finding(finding, source_name) for finding in findings]
+            raw_findings.extend(enriched)
+            module_status.append(
+                {
+                    "source": source_name,
+                    "ok": True,
+                    "count": len(enriched),
+                }
+            )
+        except Exception as exc:
+            module_status.append(
+                {
+                    "source": source_name,
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
 
     consolidated_findings = _merge_findings(raw_findings)
-
-    for item in consolidated_findings:
-        item["score"] = _coerce_score(item.get("score", 0))
-        item["severity"] = _normalize_severity(item.get("severity"), item["score"])
-
-    consolidated_findings = _apply_filters(
-        findings=consolidated_findings,
+    filtered_findings = _apply_filters(
+        consolidated_findings,
         severity=severity,
         sources=sources,
         path_contains=path_contains,
@@ -709,24 +729,29 @@ def run_analysis(
         only_existing=only_existing,
         scope=scope,
     )
-
-    reverse_sort = sort_by != "path"
-    consolidated_findings.sort(
-        key=lambda item: _sort_key(item, sort_by=sort_by),
-        reverse=reverse_sort,
-    )
-
-    _assign_finding_ids(consolidated_findings)
-
-    if top is not None and top >= 0:
-        consolidated_findings = consolidated_findings[:top]
+    sorted_findings = _sort_findings(filtered_findings, sort_by=sort_by)
 
     summary = _build_summary(
         raw_findings=raw_findings,
         consolidated_findings=consolidated_findings,
+        filtered_findings=filtered_findings,
+        displayed_findings=sorted_findings[:top] if top else sorted_findings,
         module_status=module_status,
         started_at=started_at,
     )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    output_dir = repo_root / "outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if output_path:
+        full_output_path = Path(output_path)
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        full_output_path = output_dir / f"tenax_analyze_{timestamp}.txt"
+
+    summary["full_results_path"] = str(full_output_path)
+    summary["results_directory"] = str(output_dir)
 
     metadata = {
         "mode": "analyze",
@@ -744,10 +769,21 @@ def run_analysis(
         "summary": summary,
     }
 
+    # 1. Write ALL results to file
     output_results(
         mode="analyze",
-        results=consolidated_findings,
+        results=sorted_findings,
         output_format=output_format,
-        output_path=output_path,
+        output_path=str(full_output_path),
+        metadata=metadata,
+    )
+
+    # 2. Show only TOP results in terminal
+    terminal_results = sorted_findings[:top] if top else sorted_findings
+    output_results(
+        mode="analyze",
+        results=terminal_results,
+        output_format="text",
+        output_path=None,
         metadata=metadata,
     )
