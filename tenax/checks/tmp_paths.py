@@ -275,43 +275,22 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
 def _analyze_file(path: Path) -> dict[str, Any] | None:
     hits: dict[str, dict[str, Any]] = {}
     path_str = str(path)
-    path_lower = path_str.lower()
+    path_name = path.name
 
-    _record_hit(
-        hits,
-        reason="Artifact resides in a temporary execution path",
-        score=20,
-        preview=path_str,
-        category="temp-resident",
-    )
-
-    if HIDDEN_NAME_REGEX.search(path_str):
-        _record_hit(
-            hits,
-            reason="Temporary-path artifact uses a hidden filename",
-            score=55,
-            preview=path_str,
-            category="hidden-name",
-        )
+    if re.match(r"\.X\d+-lock$", path_name):
+        return None
+    if path_name.startswith(".X11-unix") or path_name.startswith(".ICE-unix"):
+        return None
 
     stat_info = _safe_stat(path)
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
-        if stat_info.st_uid != 0:
-            _record_hit(
-                hits,
-                reason="Temporary-path artifact is owned by a non-root account",
-                score=25,
-                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
-                category="ownership",
-            )
-
         if mode & 0o111:
             _record_hit(
                 hits,
-                reason="Temporary-path artifact is directly executable",
-                score=45,
+                reason="Temporary-path artifact is executable",
+                score=50,
                 preview=f"mode={oct(mode)}",
                 category="executable-bit",
             )
@@ -320,15 +299,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
             _record_hit(
                 hits,
                 reason="Temporary-path artifact is world-writable",
-                score=65,
-                preview=f"mode={oct(mode)}",
-                category="permissions",
-            )
-        elif mode & 0o020:
-            _record_hit(
-                hits,
-                reason="Temporary-path artifact is group-writable",
-                score=35,
+                score=40,
                 preview=f"mode={oct(mode)}",
                 category="permissions",
             )
@@ -336,41 +307,28 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     try:
         raw = path.read_bytes()
     except Exception:
-        return _finalize_finding(path, hits)
+        return None
 
     if raw[:4] == ELF_MAGIC:
         _record_hit(
             hits,
             reason="Temporary-path artifact is an ELF binary",
-            score=85,
+            score=90,
             preview=path_str,
             category="elf-binary",
         )
 
-    if b"\x00" in raw[:4096] and raw[:4] != ELF_MAGIC:
-        _record_hit(
-            hits,
-            reason="Temporary-path artifact contains binary content",
-            score=55,
-            preview="[binary content omitted]",
-            category="binary",
-        )
-        return _finalize_finding(path, hits)
-
     try:
         content = raw.decode("utf-8", errors="ignore")
     except Exception:
-        return _finalize_finding(path, hits)
+        content = ""
 
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         stripped = raw_line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith("#"):
             continue
 
         line_lower = stripped.lower()
-
-        if stripped.startswith("#"):
-            continue
 
         _detect_download_behavior(hits, stripped, line_lower, line_number)
         _detect_pipe_to_interpreter(hits, stripped, line_number)
@@ -514,78 +472,17 @@ def _detect_temp_or_user_exec(
     if not DIRECT_EXEC_REGEX.search(line):
         return
 
-    _record_hit(
-        hits,
-        reason="Temporary-path artifact performs direct execution behavior",
-        score=35,
-        preview=_with_line_number(line_number, line),
-        category="direct-exec",
-    )
-
-    if _path_startswith_any(line_lower, TEMP_PATH_PATTERNS):
+    if any(x in line_lower for x in [
+        "/tmp/", "/dev/shm/",
+        "curl", "wget", "nc", "bash -c"
+    ]):
         _record_hit(
             hits,
-            reason="Temporary-path artifact executes another temporary-path payload",
-            score=85,
+            reason="Temporary-path artifact executes suspicious command",
+            score=80,
             preview=_with_line_number(line_number, line),
             category="temp-exec",
         )
-        return
-
-    if USER_PATH_REGEX.search(line):
-        _record_hit(
-            hits,
-            reason="Temporary-path artifact executes content from a user-controlled path",
-            score=75,
-            preview=_with_line_number(line_number, line),
-            category="user-exec",
-        )
-        return
-
-    if HIDDEN_PATH_REGEX.search(line):
-        _record_hit(
-            hits,
-            reason="Temporary-path artifact executes content from a hidden path",
-            score=80,
-            preview=_with_line_number(line_number, line),
-            category="hidden-exec",
-        )
-        return
-
-    path_matches = re.findall(r"(/[^\s'\";|,]+)", line)
-    for matched_path in path_matches:
-        matched_lower = matched_path.lower()
-
-        if SUSPICIOUS_FILE_EXT_REGEX.search(matched_path):
-            if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):
-                _record_hit(
-                    hits,
-                    reason="Temporary-path artifact references another executable script or binary in a temporary path",
-                    score=80,
-                    preview=_with_line_number(line_number, line),
-                    category="temp-exec",
-                )
-                return
-
-            if USER_PATH_REGEX.search(matched_path):
-                _record_hit(
-                    hits,
-                    reason="Temporary-path artifact references an executable script or binary in a user-controlled path",
-                    score=75,
-                    preview=_with_line_number(line_number, line),
-                    category="user-exec",
-                )
-                return
-
-            if HIDDEN_PATH_REGEX.search(matched_path):
-                _record_hit(
-                    hits,
-                    reason="Temporary-path artifact references an executable script or binary in a hidden path",
-                    score=80,
-                    preview=_with_line_number(line_number, line),
-                    category="hidden-exec",
-                )
-                return
 
 
 def _detect_ld_hijack(
@@ -648,48 +545,18 @@ def _detect_path_hijack(
         return
 
     path_value = match.group(1).strip()
-    path_parts = [part.strip() for part in path_value.split(":") if part.strip()]
 
-    _record_hit(
-        hits,
-        reason="Temporary-path artifact modifies PATH",
-        score=35,
-        preview=_with_line_number(line_number, line),
-        category="path-hijack",
-    )
+    if path_value == "/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin":
+        return
 
-    for part in path_parts:
-        part_lower = part.lower()
-
-        if _path_startswith_any(part_lower, TEMP_PATH_PATTERNS):
-            _record_hit(
-                hits,
-                reason="Temporary-path artifact modifies PATH to include a temporary directory",
-                score=85,
-                preview=_with_line_number(line_number, line),
-                category="path-hijack-risk",
-            )
-            return
-
-        if USER_PATH_REGEX.search(part):
-            _record_hit(
-                hits,
-                reason="Temporary-path artifact modifies PATH to include a user-controlled directory",
-                score=80,
-                preview=_with_line_number(line_number, line),
-                category="path-hijack-risk",
-            )
-            return
-
-        if HIDDEN_PATH_REGEX.search(part):
-            _record_hit(
-                hits,
-                reason="Temporary-path artifact modifies PATH to include a hidden directory",
-                score=75,
-                preview=_with_line_number(line_number, line),
-                category="path-hijack-risk",
-            )
-            return
+    if any(x in path_value for x in ["/tmp", "/dev/shm"]):
+        _record_hit(
+            hits,
+            reason="Temporary-path artifact modifies PATH to include temp directory",
+            score=85,
+            preview=_with_line_number(line_number, line),
+            category="path-hijack-risk",
+        )
 
 
 def _detect_stealth_or_privilege_changes(
@@ -813,56 +680,18 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     if not hits:
         return None
 
-    reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
 
-    high_confidence_categories = {
-        "temp-target",
-        "user-target",
-        "hidden-target",
-        "temp-resident",
-        "hidden-name",
-        "ownership",
-        "permissions",
-        "executable-bit",
+    if not any(cat in categories for cat in [
         "elf-binary",
-        "binary",
         "download-exec",
         "reverse-shell",
         "decode-exec",
         "temp-exec",
-        "user-exec",
-        "hidden-exec",
-        "ld-hijack-risk",
         "path-hijack-risk",
-        "stealth-privilege",
-        "compound-download-exec",
-        "compound-elf-risk",
-        "compound-path-hijack",
-        "compound-ld-hijack",
-        "compound-symlink-risk",
-    }
-
-    low_signal_only_categories = {
-        "download",
-        "download-to-risk-path",
-        "encoded",
-        "one-liner",
-        "direct-exec",
-        "ld-hijack",
-        "path-hijack",
-        "symlink",
-    }
-
-    has_high_confidence = bool(categories & high_confidence_categories)
-    only_low_signal = categories and categories.issubset(low_signal_only_categories)
-
-    if only_low_signal and score < 90:
-        return None
-
-    if not has_high_confidence and score < 95 and len(categories) < 2:
+        "ld-hijack-risk",
+    ]):
         return None
 
     primary_reason = max(
@@ -870,14 +699,14 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else None
+    preview = next((entry["preview"] for entry in hits.values() if entry.get("preview")), None)
 
     return {
         "path": str(path),
         "score": score,
         "severity": _severity(score),
         "reason": primary_reason,
-        "reasons": reasons,
+        "reasons": [entry["reason"] for entry in hits.values()],
         "preview": preview,
     }
 
