@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tenax.banner import show_startup_banner
 
 import argparse
 from pathlib import Path
@@ -117,6 +118,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "analyze":
+        show_startup_banner(duration=5.0)
         run_analysis(
             output_path=args.output,
             output_format=args.format,
@@ -132,6 +134,7 @@ def main() -> None:
             verbose=args.verbose,
         )
     elif args.command == "collect":
+        show_startup_banner(duration=5.0)
         run_collection(
             output_path=args.output,
             output_format=args.format,
