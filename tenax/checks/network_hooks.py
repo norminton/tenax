@@ -8,6 +8,8 @@ from typing import Any
 
 from tenax.utils import is_file_safe, path_exists
 
+DEFAULT_PATH = "/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin"
+
 NETWORK_HOOK_PATHS = [
     Path("/etc/NetworkManager"),
     Path("/etc/network"),
@@ -330,14 +332,9 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
+        # 🔥 CHANGED: defer ownership instead of immediate flag
         if stat_info.st_uid != 0:
-            _record_hit(
-                hits,
-                reason="Network hook file is owned by a non-root account",
-                score=80,
-                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
-                category="ownership",
-            )
+            hits["_ownership_flag"] = {"uid": stat_info.st_uid}
 
         if mode & 0o002:
             _record_hit(
@@ -376,18 +373,19 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     except Exception:
         return _finalize_finding(path, hits)
 
+    # 🔥 OPTIONAL NOISE REDUCTION (PPP defaults)
+    if len(content.splitlines()) < 5 and "ppp" in path_str:
+        return None
+
     if path_str in SYSTEM_HOSTS_PATHS:
         _detect_core_network_file_risk(hits, path, content)
 
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         stripped = raw_line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith("#"):
             continue
 
         line_lower = stripped.lower()
-
-        if stripped.startswith("#"):
-            continue
 
         _detect_exec_hooks(hits, stripped, line_lower, line_number)
         _detect_dns_abuse(hits, stripped, line_lower, line_number)
@@ -408,12 +406,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
 
     return _finalize_finding(path, hits)
 
-def _detect_exec_hooks(
-    hits: dict[str, dict[str, Any]],
-    line: str,
-    line_lower: str,
-    line_number: int,
-) -> None:
+def _detect_exec_hooks(hits, line, line_lower, line_number):
     match = EXEC_HOOK_KEYS.match(line)
     if not match:
         return
@@ -421,31 +414,16 @@ def _detect_exec_hooks(
     value = match.group(2).strip()
     value_lower = value.lower()
 
-    if _contains_high_risk_path(value_lower):
-        if _path_startswith_any(value_lower, TEMP_PATH_PATTERNS):
-            _record_hit(
-                hits,
-                reason="Network hook executes content from a temporary path",
-                score=95,
-                preview=_with_line_number(line_number, line),
-                category="temp-exec",
-            )
-        elif USER_PATH_REGEX.search(value):
-            _record_hit(
-                hits,
-                reason="Network hook executes content from a user-controlled path",
-                score=90,
-                preview=_with_line_number(line_number, line),
-                category="user-exec",
-            )
-
-    if HIDDEN_PATH_REGEX.search(value):
+    if any(x in value_lower for x in [
+        "/tmp/", "/dev/shm/", "/var/tmp/",
+        "curl", "wget", "nc"
+    ]):
         _record_hit(
             hits,
-            reason="Network hook references a hidden payload path",
-            score=80,
+            reason="Network hook executes suspicious payload",
+            score=90,
             preview=_with_line_number(line_number, line),
-            category="hidden-path",
+            category="exec-risk",
         )
 
 
@@ -637,16 +615,24 @@ def _detect_ld_hijack(
         )
 
 
-def _detect_path_hijack(
-    hits: dict[str, dict[str, Any]],
-    line: str,
-    line_number: int,
-) -> None:
-    if PATH_HIJACK_REGEX.search(line):
+DEFAULT_PATH = "/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin"
+
+def _detect_path_hijack(hits, line, line_number):
+    match = PATH_HIJACK_REGEX.search(line)
+    if not match:
+        return
+
+    path_value = match.group(1).strip()
+
+    # 🔥 Ignore default Ubuntu PATH
+    if path_value == DEFAULT_PATH:
+        return
+
+    if any(x in path_value for x in ["/tmp", "/dev/shm", "/var/tmp", "/home"]):
         _record_hit(
             hits,
-            reason="Network hook modifies PATH",
-            score=75,
+            reason="Network hook modifies PATH to include high-risk location",
+            score=85,
             preview=_with_line_number(line_number, line),
             category="path-hijack",
         )
@@ -669,17 +655,18 @@ def _detect_stealth_or_privilege_changes(
             )
 
 
-def _detect_suspicious_direct_exec(
-    hits: dict[str, dict[str, Any]],
-    line: str,
-    line_lower: str,
-    line_number: int,
-) -> None:
-    if DIRECT_EXEC_REGEX.search(line):
+def _detect_suspicious_direct_exec(hits, line, line_lower, line_number):
+    if not DIRECT_EXEC_REGEX.search(line):
+        return
+
+    if any(x in line_lower for x in [
+        "/tmp/", "/dev/shm/", "/var/tmp/",
+        "curl", "wget", "nc", "bash -c"
+    ]):
         _record_hit(
             hits,
-            reason="Network hook performs direct execution",
-            score=40,
+            reason="Network hook executes suspicious command",
+            score=70,
             preview=_with_line_number(line_number, line),
             category="direct-exec",
         )
@@ -715,6 +702,21 @@ def _detect_core_network_file_risk(
 
 
 def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    # 🔥 Remove ownership-only noise
+    if "_ownership_flag" in hits and len(hits) == 1:
+        return None
+
+    # 🔥 Upgrade ownership ONLY if combined with real behavior
+    if "_ownership_flag" in hits:
+        _record_hit(
+            hits,
+            reason="Network hook owned by non-root AND contains suspicious behavior",
+            score=40,
+            preview=f"owner={_owner_from_uid(hits['_ownership_flag']['uid'])}",
+            category="ownership",
+        )
+        del hits["_ownership_flag"]
+
     if not hits:
         return None
 
