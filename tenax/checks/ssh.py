@@ -323,14 +323,11 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
+        # 🔥 FIX: defer ownership instead of flagging immediately
         if stat_info.st_uid != 0:
-            _record_hit(
-                hits,
-                reason="SSH artifact is owned by a non-root account",
-                score=80,
-                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
-                category="ownership",
-            )
+            hits["_ownership_flag"] = {
+                "uid": stat_info.st_uid
+            }
 
         if mode & 0o002:
             _record_hit(
@@ -898,14 +895,29 @@ def _detect_sensitive_ssh_path_risk(
 ) -> None:
     path_lower = path_str.lower()
 
-    if path_name in {"authorized_keys", "sshd_config", "config", "rc"}:
-        _record_hit(
-            hits,
-            reason=f"Sensitive SSH persistence surface identified: {path_name}",
-            score=10,
-            preview=path_str,
-            category=f"sensitive-path-{path_name}",
-        )
+    # 🔥 FIX: only mark sensitive IF other suspicious behavior exists
+    if path_name in {"authorized_keys", "sshd_config"}:
+        if any(cat in hits for cat in [
+            "authorized-keys-command-risk-path",
+            "authorized-keys-ld-hijack",
+            "authorized-keys-path-hijack",
+            "temp-exec",
+            "user-exec",
+            "hidden-exec",
+            "download-exec",
+            "reverse-shell",
+        ]):
+            _record_hit(
+                hits,
+                reason=f"Sensitive SSH persistence surface with suspicious behavior: {path_name}",
+                score=15,
+                preview=path_str,
+                category=f"sensitive-path-{path_name}",
+            )
+
+    # 🔥 FIX: ignore user paths (expected for SSH)
+    if USER_PATH_REGEX.search(path_str):
+        return
 
     if _path_startswith_any(path_lower, TEMP_PATH_PATTERNS):
         _record_hit(
@@ -914,16 +926,6 @@ def _detect_sensitive_ssh_path_risk(
             score=95,
             preview=path_str,
             category="temp-target",
-        )
-        return
-
-    if USER_PATH_REGEX.search(path_str):
-        _record_hit(
-            hits,
-            reason="SSH artifact resides in a user-controlled path",
-            score=70,
-            preview=path_str,
-            category="user-target",
         )
         return
 
@@ -1021,6 +1023,21 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
 
 
 def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    # 🔥 FIX: drop ownership-only findings (your main false positive)
+    if "_ownership_flag" in hits and len(hits) == 1:
+        return None
+
+    # 🔥 FIX: only escalate ownership if combined with real behavior
+    if "_ownership_flag" in hits:
+        _record_hit(
+            hits,
+            reason="SSH artifact owned by non-root AND contains suspicious behavior",
+            score=25,
+            preview=f"owner={_owner_from_uid(hits['_ownership_flag']['uid'])}",
+            category="ownership",
+        )
+        del hits["_ownership_flag"]
+
     if not hits:
         return None
 
@@ -1033,21 +1050,12 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "temp-target",
         "user-target",
         "hidden-target",
-        "ownership",
         "permissions",
         "binary",
         "authorized-keys-command-risk-path",
         "authorized-keys-command-hidden",
         "authorized-keys-ld-hijack",
         "authorized-keys-path-hijack",
-        "ssh-config-authorizedkeyscommand",
-        "ssh-config-forcecommand",
-        "ssh-config-proxycommand-temp",
-        "ssh-config-proxycommand-user",
-        "ssh-config-proxycommand-hidden",
-        "ssh-config-localcommand-temp",
-        "ssh-config-localcommand-user",
-        "ssh-config-localcommand-hidden",
         "temp-exec",
         "user-exec",
         "hidden-exec",
@@ -1074,8 +1082,6 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "authorized-keys-perms",
         "sensitive-path-authorized_keys",
         "sensitive-path-sshd_config",
-        "sensitive-path-config",
-        "sensitive-path-rc",
         "ssh-config-proxycommand",
         "ssh-config-localcommand",
         "ssh-config-match",
