@@ -187,15 +187,6 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
-        if stat_info.st_uid != 0:
-            _record_hit(
-                hits,
-                reason="LD preload configuration is owned by a non-root account",
-                score=90,
-                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
-                category="ownership",
-            )
-
         if mode & 0o002:
             _record_hit(
                 hits,
@@ -208,7 +199,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     try:
         content = path.read_text(errors="ignore")
     except Exception:
-        return _finalize_finding(path, hits)
+        return None
 
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         stripped = raw_line.strip()
@@ -218,7 +209,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
         _detect_ld_preload(hits, stripped, line_number)
         _detect_ld_library_path(hits, stripped, line_number)
 
-    return _finalize_finding(path, hits)\
+    return _finalize_finding(path, hits)
 
 def _detect_ld_preload(
     hits: dict[str, dict[str, Any]],
@@ -231,14 +222,6 @@ def _detect_ld_preload(
 
     value = match.group(1).strip()
     value_lower = value.lower()
-
-    _record_hit(
-        hits,
-        reason="LD_PRELOAD is explicitly defined",
-        score=35,
-        preview=_with_line_number(line_number, line),
-        category="ld-preload",
-    )
 
     _analyze_library_path_value(hits, value, value_lower, line, line_number, "LD_PRELOAD")
 
@@ -253,15 +236,6 @@ def _detect_ld_library_path(
         return
 
     value = match.group(1).strip()
-    value_lower = value.lower()
-
-    _record_hit(
-        hits,
-        reason="LD_LIBRARY_PATH is explicitly defined",
-        score=20,
-        preview=_with_line_number(line_number, line),
-        category="ld-library-path",
-    )
 
     for part in [p.strip() for p in value.split(":") if p.strip()]:
         _analyze_library_path_value(
@@ -310,22 +284,14 @@ def _analyze_library_path_value(
         )
 
     if SHARED_OBJECT_REGEX.search(value):
-        _record_hit(
-            hits,
-            reason=f"{variable_name} references a shared object directly",
-            score=50,
-            preview=_with_line_number(line_number, line),
-            category="direct-so-reference",
-        )
-
-    if SUSPICIOUS_SO_NAME_REGEX.search(value):
-        _record_hit(
-            hits,
-            reason=f"{variable_name} references a suspicious shared object name",
-            score=80,
-            preview=_with_line_number(line_number, line),
-            category="suspicious-so-name",
-        )
+        if SUSPICIOUS_SO_NAME_REGEX.search(value):
+            _record_hit(
+                hits,
+                reason=f"{variable_name} references a suspicious shared object name",
+                score=85,
+                preview=_with_line_number(line_number, line),
+                category="suspicious-so-name",
+            )
 
 
 def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
@@ -366,39 +332,15 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     if not hits:
         return None
 
-    reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
 
-    high_confidence_categories = {
-        "temp-target",
-        "user-target",
-        "hidden-target",
-        "ownership",
-        "permissions",
+    if not any(cat in categories for cat in {
         "temp-library-path",
         "user-library-path",
         "hidden-library-path",
         "suspicious-so-name",
-        "compound-preload-risk-path",
-        "compound-preload-direct-so",
-        "compound-suspicious-so",
-    }
-
-    low_signal_only_categories = {
-        "ld-preload",
-        "ld-library-path",
-        "direct-so-reference",
-    }
-
-    has_high_confidence = bool(categories & high_confidence_categories)
-    only_low_signal = categories and categories.issubset(low_signal_only_categories)
-
-    if only_low_signal and score < 90:
-        return None
-
-    if not has_high_confidence and score < 95 and len(categories) < 2:
+    }):
         return None
 
     primary_reason = max(
@@ -406,17 +348,16 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else None
+    preview = next((entry["preview"] for entry in hits.values() if entry.get("preview")), None)
 
     return {
         "path": str(path),
         "score": score,
         "severity": _severity(score),
         "reason": primary_reason,
-        "reasons": reasons,
+        "reasons": [entry["reason"] for entry in hits.values()],
         "preview": preview,
     }
-
 
 def _record_hit(
     hits: dict[str, dict[str, Any]],
