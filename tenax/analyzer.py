@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import time
+from time import perf_counter
+from typing import Any
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
-from time import perf_counter
 
 from tenax.checks.at_jobs import analyze_at_job_locations
 from tenax.checks.autostart_hooks import analyze_autostart_hook_locations
@@ -23,23 +24,23 @@ from tenax.checks.systemd import analyze_systemd_locations
 from tenax.checks.tmp_paths import analyze_tmp_paths
 from tenax.reporter import output_results
 
-MODULES: tuple[tuple[str, Callable[[], list[dict[str, Any]]]], ...] = (
-    ("cron", analyze_cron_locations),
-    ("systemd", analyze_systemd_locations),
-    ("shell_profiles", analyze_shell_profile_locations),
-    ("ssh", analyze_ssh_locations),
-    ("sudoers", analyze_sudoers_locations),
-    ("rc_init", analyze_rc_init_locations),
-    ("tmp_paths", analyze_tmp_paths),
-    ("ld_preload", analyze_ld_preload_locations),
-    ("autostart_hooks", analyze_autostart_hook_locations),
-    ("network_hooks", analyze_network_hook_locations),
-    ("pam", analyze_pam_locations),
-    ("at_jobs", analyze_at_job_locations),
-    ("containers", analyze_container_locations),
-    ("environment_hooks", analyze_environment_hook_locations),
-    ("capabilities", analyze_capabilities),
-)
+ANALYZE_SOURCES = {
+    "cron": analyze_cron_locations,
+    "systemd": analyze_systemd_locations,
+    "shell_profiles": analyze_shell_profile_locations,
+    "ssh": analyze_ssh_locations,
+    "sudoers": analyze_sudoers_locations,
+    "rc_init": analyze_rc_init_locations,
+    "tmp_paths": analyze_tmp_paths,
+    "ld_preload": analyze_ld_preload_locations,
+    "autostart_hooks": analyze_autostart_hook_locations,
+    "network_hooks": analyze_network_hook_locations,
+    "pam": analyze_pam_locations,
+    "at_jobs": analyze_at_job_locations,
+    "containers": analyze_container_locations,
+    "environment_hooks": analyze_environment_hook_locations,
+    "capabilities": analyze_capabilities,
+}
 
 SOURCE_PRIORITY: dict[str, int] = {
     "systemd": 100,
@@ -668,9 +669,9 @@ def _apply_filters(
 
 
 def run_analysis(
-    output_path: str | None = None,
+    output_path=None,
     output_format: str = "text",
-    top: int = 5,
+    top: int = 20,
     severity: str | None = None,
     sources: list[str] | None = None,
     path_contains: str | None = None,
@@ -683,108 +684,59 @@ def run_analysis(
 ) -> None:
     started_at = perf_counter()
 
-    raw_findings: list[dict[str, Any]] = []
-    module_status: list[dict[str, Any]] = []
-
     selected_sources = sources or list(ANALYZE_SOURCES.keys())
+    findings: list[dict[str, Any]] = []
+    module_error_count = 0
 
-    for source_name in selected_sources:
-        analyze_func = ANALYZE_SOURCES.get(source_name)
-        if not analyze_func:
-            module_status.append(
-                {
-                    "source": source_name,
-                    "ok": False,
-                    "error": "Unknown source",
-                }
-            )
+    for source in selected_sources:
+        analyzer = ANALYZE_SOURCES.get(source)
+        if analyzer is None:
             continue
 
         try:
-            findings = analyze_func() or []
-            enriched = [_enrich_finding(finding, source_name) for finding in findings]
-            raw_findings.extend(enriched)
-            module_status.append(
-                {
-                    "source": source_name,
-                    "ok": True,
-                    "count": len(enriched),
-                }
-            )
-        except Exception as exc:
-            module_status.append(
-                {
-                    "source": source_name,
-                    "ok": False,
-                    "error": str(exc),
-                }
-            )
+            results = analyzer()
+            for item in results:
+                enriched = dict(item)
+                enriched["source"] = source
+                findings.append(enriched)
+        except Exception:
+            module_error_count += 1
+            if verbose:
+                raise
 
-    consolidated_findings = _merge_findings(raw_findings)
-    filtered_findings = _apply_filters(
-        consolidated_findings,
-        severity=severity,
-        sources=sources,
-        path_contains=path_contains,
-        only_writable=only_writable,
-        only_existing=only_existing,
-        scope=scope,
-    )
-    sorted_findings = _sort_findings(filtered_findings, sort_by=sort_by)
+    findings.sort(key=lambda item: item.get("score", 0), reverse=True)
 
-    summary = _build_summary(
-        raw_findings=raw_findings,
-        consolidated_findings=consolidated_findings,
-        filtered_findings=filtered_findings,
-        displayed_findings=sorted_findings[:top] if top else sorted_findings,
-        module_status=module_status,
-        started_at=started_at,
-    )
+    if severity:
+        findings = [f for f in findings if str(f.get("severity", "")).upper() == severity.upper()]
 
-    repo_root = Path(__file__).resolve().parents[1]
-    output_dir = repo_root / "outputs"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if path_contains:
+        needle = path_contains.lower()
+        findings = [f for f in findings if needle in str(f.get("path", "")).lower()]
 
-    if output_path:
-        full_output_path = Path(output_path)
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        full_output_path = output_dir / f"tenax_analyze_{timestamp}.txt"
+    displayed_results = findings[:top]
 
-    summary["full_results_path"] = str(full_output_path)
-    summary["results_directory"] = str(output_dir)
+    duration_ms = round((perf_counter() - started_at) * 1000, 2)
 
-    metadata = {
-        "mode": "analyze",
-        "quiet": quiet,
-        "filters": {
-            "severity": severity,
-            "sources": sources or [],
-            "path_contains": path_contains,
-            "only_writable": only_writable,
-            "only_existing": only_existing,
-            "scope": scope,
-            "sort_by": sort_by,
-            "top": top,
-        },
-        "summary": summary,
+    summary = {
+        "module_success_count": len(selected_sources) - module_error_count,
+        "module_count": len(selected_sources),
+        "module_error_count": module_error_count,
+        "raw_finding_count": len(findings),
+        "consolidated_finding_count": len(findings),
+        "deduplicated_count": 0,
+        "unique_path_count": len({str(f.get('path', '')) for f in findings}),
+        "analysis_duration_ms": duration_ms,
     }
 
-    # 1. Write ALL results to file
-    output_results(
-        mode="analyze",
-        results=sorted_findings,
-        output_format=output_format,
-        output_path=str(full_output_path),
-        metadata=metadata,
-    )
+    metadata = {
+        "summary": summary,
+        "quiet": quiet,
+    }
 
-    # 2. Show only TOP results in terminal
-    terminal_results = sorted_findings[:top] if top else sorted_findings
     output_results(
         mode="analyze",
-        results=terminal_results,
-        output_format="text",
-        output_path=None,
+        results=displayed_results,
+        output_format=output_format,
+        output_path=output_path,
         metadata=metadata,
     )
