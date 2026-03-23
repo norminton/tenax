@@ -236,15 +236,6 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
-        if stat_info.st_uid != 0:
-            _record_hit(
-                hits,
-                reason="Environment hook is owned by a non-root account",
-                score=80,
-                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
-                category="ownership",
-            )
-
         if mode & 0o002:
             _record_hit(
                 hits,
@@ -257,7 +248,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     try:
         content = path.read_text(errors="ignore")
     except Exception:
-        return _finalize_finding(path, hits)
+        return None
 
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         stripped = raw_line.strip()
@@ -287,33 +278,16 @@ def _detect_exec_behavior(
     if not DIRECT_EXEC_REGEX.search(line):
         return
 
-    if _path_startswith_any(line_lower, TEMP_PATH_PATTERNS):
+    if any(x in line_lower for x in [
+        "/tmp/", "/dev/shm/",
+        "curl", "wget", "nc", "bash -c"
+    ]):
         _record_hit(
             hits,
-            reason="Environment hook executes content from a temporary path",
-            score=90,
-            preview=_with_line_number(line_number, line),
-            category="temp-exec",
-        )
-        return
-
-    if USER_PATH_REGEX.search(line):
-        _record_hit(
-            hits,
-            reason="Environment hook executes content from a user-controlled path",
-            score=85,
-            preview=_with_line_number(line_number, line),
-            category="user-exec",
-        )
-        return
-
-    if HIDDEN_PATH_REGEX.search(line):
-        _record_hit(
-            hits,
-            reason="Environment hook executes content from a hidden path",
+            reason="Environment hook executes suspicious command",
             score=80,
             preview=_with_line_number(line_number, line),
-            category="hidden-exec",
+            category="temp-exec",
         )
 
 
@@ -332,35 +306,33 @@ def _detect_env_variable_abuse(
         "LD_LIBRARY_PATH=",
     )
 
-    if any(var.lower() in line_lower for var in suspicious_vars):
-        if _path_startswith_any(line_lower, TEMP_PATH_PATTERNS):
-            _record_hit(
-                hits,
-                reason="Environment hook defines a sensitive environment variable using a temporary path",
-                score=95,
-                preview=_with_line_number(line_number, line),
-                category="env-temp",
-            )
-            return
+    if not any(var.lower() in line_lower for var in suspicious_vars):
+        return
 
-        if USER_PATH_REGEX.search(line):
-            _record_hit(
-                hits,
-                reason="Environment hook defines a sensitive environment variable using a user-controlled path",
-                score=90,
-                preview=_with_line_number(line_number, line),
-                category="env-user",
-            )
-            return
-
-        if HIDDEN_PATH_REGEX.search(line):
-            _record_hit(
-                hits,
-                reason="Environment hook defines a sensitive environment variable using a hidden path",
-                score=85,
-                preview=_with_line_number(line_number, line),
-                category="env-hidden",
-            )
+    if _path_startswith_any(line_lower, TEMP_PATH_PATTERNS):
+        _record_hit(
+            hits,
+            reason="Environment hook defines sensitive variable using temp path",
+            score=95,
+            preview=_with_line_number(line_number, line),
+            category="env-temp",
+        )
+    elif USER_PATH_REGEX.search(line):
+        _record_hit(
+            hits,
+            reason="Environment hook defines sensitive variable using user path",
+            score=90,
+            preview=_with_line_number(line_number, line),
+            category="env-user",
+        )
+    elif HIDDEN_PATH_REGEX.search(line):
+        _record_hit(
+            hits,
+            reason="Environment hook defines sensitive variable using hidden path",
+            score=85,
+            preview=_with_line_number(line_number, line),
+            category="env-hidden",
+        )
 
 
 def _detect_path_hijack(
@@ -373,38 +345,18 @@ def _detect_path_hijack(
         return
 
     path_value = match.group(1).strip()
-    path_parts = [part.strip() for part in path_value.split(":") if part.strip()]
 
-    for part in path_parts:
-        if _path_startswith_any(part, TEMP_PATH_PATTERNS):
-            _record_hit(
-                hits,
-                reason="Environment hook modifies PATH to include a temporary directory",
-                score=85,
-                preview=_with_line_number(line_number, line),
-                category="path-hijack",
-            )
-            return
+    if path_value == "/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin":
+        return
 
-        if USER_PATH_REGEX.search(part):
-            _record_hit(
-                hits,
-                reason="Environment hook modifies PATH to include a user-controlled directory",
-                score=80,
-                preview=_with_line_number(line_number, line),
-                category="path-hijack",
-            )
-            return
-
-        if HIDDEN_PATH_REGEX.search(part):
-            _record_hit(
-                hits,
-                reason="Environment hook modifies PATH to include a hidden directory",
-                score=75,
-                preview=_with_line_number(line_number, line),
-                category="path-hijack",
-            )
-            return
+    if any(x in path_value for x in ["/tmp", "/dev/shm"]):
+        _record_hit(
+            hits,
+            reason="Environment hook modifies PATH to include temp directory",
+            score=85,
+            preview=_with_line_number(line_number, line),
+            category="path-hijack",
+        )
 
 
 def _detect_ld_hijack(
@@ -416,13 +368,12 @@ def _detect_ld_hijack(
     if not match:
         return
 
-    variable_name = match.group(1)
     variable_value = match.group(2)
 
     if _path_startswith_any(variable_value, TEMP_PATH_PATTERNS):
         _record_hit(
             hits,
-            reason=f"Environment hook sets {variable_name} to a temporary path",
+            reason="Environment hook sets LD variable to temp path",
             score=95,
             preview=_with_line_number(line_number, line),
             category="ld-hijack",
@@ -430,7 +381,7 @@ def _detect_ld_hijack(
     elif USER_PATH_REGEX.search(variable_value):
         _record_hit(
             hits,
-            reason=f"Environment hook sets {variable_name} to a user-controlled path",
+            reason="Environment hook sets LD variable to user path",
             score=90,
             preview=_with_line_number(line_number, line),
             category="ld-hijack",
@@ -438,7 +389,7 @@ def _detect_ld_hijack(
     elif HIDDEN_PATH_REGEX.search(variable_value):
         _record_hit(
             hits,
-            reason=f"Environment hook sets {variable_name} to a hidden path",
+            reason="Environment hook sets LD variable to hidden path",
             score=85,
             preview=_with_line_number(line_number, line),
             category="ld-hijack",
@@ -586,20 +537,11 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     if not hits:
         return None
 
-    reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
 
-    high_confidence_categories = {
-        "temp-target",
-        "user-target",
-        "hidden-target",
-        "ownership",
-        "permissions",
+    if not any(cat in categories for cat in {
         "temp-exec",
-        "user-exec",
-        "hidden-exec",
         "env-temp",
         "env-user",
         "env-hidden",
@@ -608,24 +550,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "download-exec",
         "reverse-shell",
         "decode-exec",
-        "compound-download-exec",
-        "compound-path-hijack",
-        "compound-env-exec",
-    }
-
-    low_signal_only_categories = {
-        "download",
-        "encoded",
-        "one-liner",
-    }
-
-    has_high_confidence = bool(categories & high_confidence_categories)
-    only_low_signal = categories and categories.issubset(low_signal_only_categories)
-
-    if only_low_signal and score < 90:
-        return None
-
-    if not has_high_confidence and score < 95 and len(categories) < 2:
+    }):
         return None
 
     primary_reason = max(
@@ -633,14 +558,14 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else None
+    preview = next((entry["preview"] for entry in hits.values() if entry.get("preview")), None)
 
     return {
         "path": str(path),
         "score": score,
         "severity": _severity(score),
         "reason": primary_reason,
-        "reasons": reasons,
+        "reasons": [entry["reason"] for entry in hits.values()],
         "preview": preview,
     }
 
