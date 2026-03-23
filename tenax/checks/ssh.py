@@ -416,6 +416,17 @@ def _detect_authorized_keys_abuse(
     line_lower: str,
     line_number: int,
 ) -> None:
+    stripped = line.strip()
+
+    if not stripped or stripped.startswith("#"):
+        return
+
+    is_key_line = AUTHORIZED_KEYS_KEYTYPE_REGEX.match(stripped)
+
+    if not is_key_line and not any(x in stripped for x in ["command=", "environment="]):
+        return
+
+
     if AUTHORIZED_KEYS_COMMAND_REGEX.search(line):
         _record_hit(
             hits,
@@ -443,11 +454,12 @@ def _detect_authorized_keys_abuse(
                 category="authorized-keys-command-hidden",
             )
 
+
     if AUTHORIZED_KEYS_ENV_REGEX.search(line):
         _record_hit(
             hits,
             reason="authorized_keys entry sets environment= options",
-            score=35,
+            score=25,  # 🔻 reduced noise
             preview=_with_line_number(line_number, line),
             category="authorized-keys-environment",
         )
@@ -470,28 +482,31 @@ def _detect_authorized_keys_abuse(
                 category="authorized-keys-path-hijack",
             )
 
+
     if AUTHORIZED_KEYS_FROM_REGEX.search(line):
         _record_hit(
             hits,
-            reason="authorized_keys entry uses a constrained from= rule",
-            score=10,
+            reason="authorized_keys entry uses from= restriction (normal hardening)",
+            score=2,
             preview=_with_line_number(line_number, line),
             category="authorized-keys-from",
         )
 
-    if not AUTHORIZED_KEYS_KEYTYPE_REGEX.match(line):
+
+    if not is_key_line:
         if _contains_high_risk_path(line_lower):
             _record_hit(
                 hits,
-                reason="authorized_keys line contains non-standard content referencing a high-risk path",
+                reason="authorized_keys contains non-key line referencing high-risk path",
                 score=90,
                 preview=_with_line_number(line_number, line),
                 category="authorized-keys-nonstandard",
             )
+
         elif HIDDEN_PATH_REGEX.search(line):
             _record_hit(
                 hits,
-                reason="authorized_keys line contains non-standard content referencing a hidden path",
+                reason="authorized_keys contains non-key line referencing hidden path",
                 score=80,
                 preview=_with_line_number(line_number, line),
                 category="authorized-keys-nonstandard",
