@@ -4,6 +4,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
+from time import perf_counter
 
 from tenax.checks.at_jobs import analyze_at_job_locations
 from tenax.checks.autostart_hooks import analyze_autostart_hook_locations
