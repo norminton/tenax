@@ -345,16 +345,6 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     stat_info = _safe_stat(path)
     if stat_info:
         mode = stat_info.st_mode & 0o777
-        owner_name = _owner_from_uid(stat_info.st_uid)
-
-        if stat_info.st_uid != 0:
-            _record_hit(
-                hits,
-                reason="PAM configuration is owned by a non-root account",
-                score=90,
-                preview=f"owner={owner_name}",
-                category="ownership",
-            )
 
         if mode & 0o002:
             _record_hit(
@@ -376,12 +366,12 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     try:
         raw = path.read_bytes()
     except Exception:
-        return _finalize_finding(path, hits)
+        return None
 
     if b"\x00" in raw[:4096]:
         _record_hit(
             hits,
-            reason="PAM configuration contains binary content instead of normal text directives",
+            reason="PAM configuration contains binary content",
             score=85,
             preview="[binary content omitted]",
             category="binary",
@@ -391,13 +381,11 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     try:
         content = raw.decode("utf-8", errors="ignore")
     except Exception:
-        return _finalize_finding(path, hits)
+        return None
 
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         stripped = raw_line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("#"):
+        if not stripped or stripped.startswith("#"):
             continue
 
         line_lower = stripped.lower()
@@ -532,32 +520,6 @@ def _detect_pam_exec(
     args = (match.group("args") or "").strip()
     args_lower = args.lower()
 
-    _record_hit(
-        hits,
-        reason="PAM configuration uses pam_exec.so",
-        score=55,
-        preview=_with_line_number(line_number, line),
-        category="pam-exec",
-    )
-
-    if "expose_authtok" in args_lower:
-        _record_hit(
-            hits,
-            reason="pam_exec.so is configured with expose_authtok",
-            score=85,
-            preview=_with_line_number(line_number, line),
-            category="pam-exec-credential-access",
-        )
-
-    if "seteuid" in args_lower:
-        _record_hit(
-            hits,
-            reason="pam_exec.so is configured with seteuid",
-            score=35,
-            preview=_with_line_number(line_number, line),
-            category="pam-exec-seteuid",
-        )
-
     module_paths = MODULE_PATH_REGEX.findall(args)
     for candidate in module_paths:
         candidate_lower = candidate.lower()
@@ -587,6 +549,15 @@ def _detect_pam_exec(
                 category="pam-exec-hidden-path",
             )
 
+    if "expose_authtok" in args_lower:
+        _record_hit(
+            hits,
+            reason="pam_exec.so is configured with expose_authtok",
+            score=85,
+            preview=_with_line_number(line_number, line),
+            category="pam-exec-credential-access",
+        )
+
     _detect_inline_payload_behaviors(hits, line, line_lower, line_number, prefix="pam_exec")
 
 
@@ -609,21 +580,7 @@ def _detect_pam_permit(
         return
 
     if ptype in {"auth", "account", "password"}:
-        _record_hit(
-            hits,
-            reason=f"PAM configuration uses pam_permit.so in {ptype} context",
-            score=95,
-            preview=_with_line_number(line_number, line),
-            category="pam-permit-high-risk",
-        )
-    else:
-        _record_hit(
-            hits,
-            reason="PAM configuration uses pam_permit.so outside common benign desktop contexts",
-            score=55,
-            preview=_with_line_number(line_number, line),
-            category="pam-permit",
-        )
+        return
 
 
 def _detect_pam_env_abuse(
@@ -821,22 +778,10 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     if not hits:
         return None
 
-    reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
 
-    high_confidence_categories = {
-        "temp-target",
-        "user-target",
-        "hidden-target",
-        "ownership",
-        "permissions",
-        "binary",
-        "temp-module",
-        "user-module",
-        "hidden-module",
-        "nonstandard-module",
+    if not any(cat in categories for cat in {
         "pam-permit-high-risk",
         "pam-exec-credential-access",
         "pam-exec-temp-path",
@@ -845,30 +790,16 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "pam_exec-download-exec",
         "pam_exec-reverse-shell",
         "pam_exec-decode-exec",
+        "temp-module",
+        "user-module",
+        "hidden-module",
         "temp-include",
         "user-include",
         "hidden-include",
         "pam-env-temp-file",
         "pam-env-user-file",
         "pam-env-hidden-file",
-    }
-
-    low_signal_only_categories = {
-        "pam-exec",
-        "pam-exec-seteuid",
-        "pam-permit",
-        "pam-python",
-        "generic-encoded",
-        "pam_exec-encoded",
-    }
-
-    has_high_confidence = bool(categories & high_confidence_categories)
-    only_low_signal = categories and categories.issubset(low_signal_only_categories)
-
-    if only_low_signal and score < 90:
-        return None
-
-    if not has_high_confidence and score < 95 and len(categories) < 2:
+    }):
         return None
 
     primary_reason = max(
@@ -876,14 +807,14 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else None
+    preview = next((entry["preview"] for entry in hits.values() if entry.get("preview")), None)
 
     return {
         "path": str(path),
         "score": score,
         "severity": _severity(score),
         "reason": primary_reason,
-        "reasons": reasons,
+        "reasons": [entry["reason"] for entry in hits.values()],
         "preview": preview,
     }
 
