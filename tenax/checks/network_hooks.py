@@ -702,11 +702,9 @@ def _detect_core_network_file_risk(
 
 
 def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
-    # 🔥 Remove ownership-only noise
     if "_ownership_flag" in hits and len(hits) == 1:
         return None
 
-    # 🔥 Upgrade ownership ONLY if combined with real behavior
     if "_ownership_flag" in hits:
         _record_hit(
             hits,
