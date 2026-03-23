@@ -23,29 +23,50 @@ def output_results(
 ) -> None:
     metadata = metadata or {}
 
-    # 🔥 ALWAYS SAVE FULL RESULTS
-    output_dir = Path("tenax/output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+    output_dir = _get_tenax_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"{mode}_{timestamp}.txt"
 
-    full_render = render_text(mode, results, metadata=metadata)
-    output_file.write_text(full_render, encoding="utf-8")
+    extension = "json" if output_format == "json" else "txt"
+    auto_output_file = output_dir / f"{mode}_{timestamp}.{extension}"
 
-    # 🔥 TERMINAL = TOP 5 ONLY
+    if output_format == "json":
+        full_render = json.dumps(
+            {
+                "mode": mode,
+                "count": len(results),
+                "metadata": metadata,
+                "results": results,
+            },
+            indent=2,
+            default=str,
+        )
+    else:
+        full_render = render_text(mode, results, metadata=metadata)
+
+    # Always save full results to Tenax output directory
+    auto_output_file.write_text(full_render, encoding="utf-8")
+
+    # Terminal only shows top 5 by default
     display_results = results[:5]
 
-    terminal_render = render_text(
-        mode,
-        display_results,
-        metadata=metadata,
-    )
+    if output_format == "json":
+        terminal_render = json.dumps(
+            {
+                "mode": mode,
+                "count": len(display_results),
+                "metadata": metadata,
+                "results": display_results,
+            },
+            indent=2,
+            default=str,
+        )
+    else:
+        terminal_render = render_text(mode, display_results, metadata=metadata)
 
     print(terminal_render)
 
     print("\n" + "=" * 80)
-    print(f"[+] Full results saved to: {output_file}")
+    print(f"[+] Full results saved to: {auto_output_file}")
     print("=" * 80)
 
 
@@ -228,3 +249,17 @@ def _ensure_list(value):
     if isinstance(value, list):
         return value
     return [value]
+
+def _get_tenax_output_dir() -> Path:
+    """
+    Resolve output directory relative to the installed/cloned Tenax project,
+    not the current working directory.
+    """
+    reporter_file = Path(__file__).resolve()
+
+    # reporter.py is expected at: <repo_root>/tenax/reporter.py
+    repo_root = reporter_file.parent.parent
+
+    output_dir = repo_root / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
