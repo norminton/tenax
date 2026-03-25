@@ -581,21 +581,30 @@ def _build_location_tree(
     lines: list[str] = []
     prefix = "    " * indent
 
-    if not path.exists():
-        lines.append(f"{prefix}{path}  (Missing)")
+    lstat_info = _safe_stat(path, follow_symlinks=False)
+    stat_info = _safe_stat(path, follow_symlinks=True)
+
+    exists = bool(lstat_info or stat_info)
+
+    if not exists:
+        if indent == 0:
+            lines.append(f"{path}  (Missing)")
+        else:
+            lines.append(f"{prefix}----{path.name}  (Missing)")
         return lines
 
-    name = str(path) if indent == 0 else _tree_label(path)
-    perm = _format_permissions(path)
-    owner = _format_owner(path)
-    kind = "Directory" if path.is_dir() else "File"
+    is_dir = bool(stat_info and path.is_dir())
+
+    name = str(path) if indent == 0 else (path.name + "/" if is_dir else path.name)
+    perm = oct(((stat_info or lstat_info).st_mode) & 0o777) if (stat_info or lstat_info) else "unknown"
+    owner = _safe_owner((stat_info or lstat_info).st_uid if (stat_info or lstat_info) else None)
 
     if indent == 0:
         lines.append(f"{name}  (Permissions) {perm}  (Creator) {owner}")
     else:
         lines.append(f"{prefix}----{name}  (Permissions) {perm}  (Creator) {owner}")
 
-    if not path.is_dir():
+    if not is_dir:
         return lines
 
     if indent >= max_depth:
@@ -606,12 +615,18 @@ def _build_location_tree(
             list(path.iterdir()),
             key=lambda p: (not p.is_dir(), p.name.lower()),
         )
-    except Exception:
+    except (PermissionError, OSError):
         lines.append(f"{prefix}    ----[Permission Denied]")
         return lines
 
     for child in children:
-        lines.extend(_build_location_tree(child, indent=indent + 1, max_depth=max_depth))
+        lines.extend(
+            _build_location_tree(
+                child,
+                indent=indent + 1,
+                max_depth=max_depth,
+            )
+        )
 
     return lines
 
