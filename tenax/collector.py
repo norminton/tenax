@@ -785,7 +785,7 @@ def run_collection(
         max_hash_size=max_hash_size,
         max_reference_depth=max_reference_depth,
         baseline_name=baseline_name,
-        exclude_patterns=exclude_patterns,
+        exclude_patterns=DEFAULT_EXCLUDE_PATTERNS + tuple(exclude_patterns or ()),
     )
 
     collection_id = datetime.now(timezone.utc).strftime("collect_%Y%m%dT%H%M%SZ")

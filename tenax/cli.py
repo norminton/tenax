@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         type=Path,
-        help="Optional output directory or file path.",
+        help="Optional output directory.",
     )
     collect_parser.add_argument(
         "--format",
@@ -108,6 +108,65 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="hash_files",
         help="Calculate SHA256 hashes for collected files.",
+    )
+    collect_parser.add_argument(
+        "--mode",
+        choices=["inventory", "parsed", "evidence", "archive"],
+        default="parsed",
+        help="Collection mode.",
+    )
+    collect_parser.add_argument(
+        "--modules",
+        type=_csv_to_list,
+        help="Comma-separated module list, e.g. ssh,pam,shell_profiles",
+    )
+    collect_parser.add_argument(
+        "--no-follow-references",
+        action="store_true",
+        help="Do not follow referenced file paths discovered during collection.",
+    )
+    collect_parser.add_argument(
+        "--copy-files",
+        action="store_true",
+        help="Copy directly collected artifacts into the output bundle.",
+    )
+    collect_parser.add_argument(
+        "--copy-references",
+        action="store_true",
+        help="Copy reference-discovered artifacts into the output bundle.",
+    )
+    collect_parser.add_argument(
+        "--archive",
+        action="store_true",
+        help="Package the collection output into a .tgz archive.",
+    )
+    collect_parser.add_argument(
+        "--baseline-name",
+        help="Optional baseline label for this collection run.",
+    )
+    collect_parser.add_argument(
+        "--max-file-size",
+        type=int,
+        default=2 * 1024 * 1024,
+        help="Maximum number of bytes to capture from text files.",
+    )
+    collect_parser.add_argument(
+        "--max-hash-size",
+        type=int,
+        default=10 * 1024 * 1024,
+        help="Maximum file size in bytes eligible for hashing.",
+    )
+    collect_parser.add_argument(
+        "--max-reference-depth",
+        type=int,
+        default=2,
+        help="Maximum depth for recursive reference following.",
+    )
+    collect_parser.add_argument(
+        "--exclude-path",
+        action="append",
+        default=[],
+        help="Path substring to exclude. Can be used multiple times.",
     )
 
     return parser
@@ -139,6 +198,17 @@ def main() -> None:
             output_path=args.output,
             output_format=args.format,
             hash_files=args.hash_files,
+            mode=args.mode,
+            modules=args.modules,
+            follow_references=not args.no_follow_references,
+            copy_files=args.copy_files,
+            copy_references=args.copy_references,
+            archive=args.archive,
+            baseline_name=args.baseline_name,
+            max_file_size=args.max_file_size,
+            max_hash_size=args.max_hash_size,
+            max_reference_depth=args.max_reference_depth,
+            exclude_patterns=tuple(args.exclude_path) if args.exclude_path else (),
         )
     else:
         parser.print_help()
