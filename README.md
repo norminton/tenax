@@ -1,6 +1,6 @@
 # Tenax
 
-> Linux Persistence Analysis (Tool + Playbook)
+> Incident Response Tool/Playbook for Linux 
 
 ---
 
