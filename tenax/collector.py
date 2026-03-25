@@ -776,7 +776,7 @@ def run_collection(
     options = CollectionOptions(
         mode=mode,
         modules=selected_modules,
-        output_dir=Path(output_path) if output_path else Path("tenax/output"),
+        output_dir=Path(output_path) if output_path else Path(__file__).resolve().parent.parent / "output",
         hash_files=hash_files,
         content=mode in {"parsed", "evidence", "archive"},
         copy_files=copy_files or mode in {"evidence", "archive"},
