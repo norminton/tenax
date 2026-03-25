@@ -30,7 +30,6 @@ from tenax.checks.ssh import collect_ssh_locations
 from tenax.checks.sudoers import collect_sudoers_locations
 from tenax.checks.systemd import collect_systemd_locations
 from tenax.checks.tmp_paths import collect_tmp_paths
-from tenax.reporter import output_results
 
 
 TEXT_PREVIEW_CHARS = 400
@@ -235,15 +234,18 @@ def _safe_group(gid: int | None) -> str | None:
 def _safe_stat(path: Path, follow_symlinks: bool = True):
     try:
         return path.stat() if follow_symlinks else path.lstat()
-    except Exception:
+    except (PermissionError, FileNotFoundError, OSError):
         return None
 
 
 def _compute_sha256(path: Path, max_bytes: int) -> str | None:
     try:
+        stat_info = _safe_stat(path, follow_symlinks=True)
+        if stat_info is None:
+            return None
         if not path.is_file():
             return None
-        if path.stat().st_size > max_bytes:
+        if stat_info.st_size > max_bytes:
             return None
         h = hashlib.sha256()
         with path.open("rb") as f:
@@ -442,17 +444,16 @@ def _ingest_direct_artifact(
         return None, [], errors
 
     path = Path(normalized_path)
-    exists = path.exists() or path.is_symlink()
+    lstat_info = _safe_stat(path, follow_symlinks=False)
+    stat_info = _safe_stat(path, follow_symlinks=True)
 
+    exists = bool(lstat_info or stat_info)
     if not exists and not options.include_missing:
         return None, [], errors
 
-    lstat_info = _safe_stat(path, follow_symlinks=False)
-    stat_info = _safe_stat(path, follow_symlinks=True) if exists else None
-
     is_symlink = bool(lstat_info and path.is_symlink())
-    is_file = bool(exists and path.is_file())
-    is_dir = bool(exists and path.is_dir())
+    is_file = bool(stat_info and path.is_file())
+    is_dir = bool(stat_info and path.is_dir())
 
     symlink_target = None
     if is_symlink:
@@ -767,9 +768,11 @@ def run_collection(
     max_file_size: int = DEFAULT_TEXT_CAPTURE_MAX_BYTES,
     max_hash_size: int = DEFAULT_HASH_MAX_BYTES,
     max_reference_depth: int = DEFAULT_REFERENCE_DEPTH,
-    exclude_patterns: tuple[str, ...] = DEFAULT_EXCLUDE_PATTERNS,
+    exclude_patterns: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     selected_modules = modules or list(CHECK_REGISTRY.keys())
+    effective_exclude_patterns = DEFAULT_EXCLUDE_PATTERNS + tuple(exclude_patterns or ())
+
     options = CollectionOptions(
         mode=mode,
         modules=selected_modules,
@@ -787,16 +790,21 @@ def run_collection(
         max_hash_size=max_hash_size,
         max_reference_depth=max_reference_depth,
         baseline_name=baseline_name,
-        exclude_patterns=DEFAULT_EXCLUDE_PATTERNS + tuple(exclude_patterns or ()),
+        exclude_patterns=effective_exclude_patterns,
     )
 
-    collection_id = datetime.now(timezone.utc).strftime("collect_%Y%m%dT%H%M%SZ")
+    collection_id = datetime.now(timezone.utc).strftime("collect_%Y%m%d_%H%M%S")
     host = socket.gethostname()
     user = getpass.getuser()
     root_output_dir = options.output_dir / collection_id
     root_output_dir.mkdir(parents=True, exist_ok=True)
+    (root_output_dir / "collected").mkdir(parents=True, exist_ok=True)
 
-    evidence_root = root_output_dir if options.copy_files or options.copy_references or options.archive else None
+    evidence_root = None
+    if options.copy_files or options.copy_references or options.archive:
+        evidence_root = root_output_dir
+        (root_output_dir / "collected" / "direct").mkdir(parents=True, exist_ok=True)
+        (root_output_dir / "collected" / "referenced").mkdir(parents=True, exist_ok=True)
 
     artifacts: list[ArtifactRecord] = []
     references: list[ReferenceRecord] = []
@@ -922,13 +930,4 @@ def run_collection(
         manifest["archive_path"] = str(archive_path)
         _write_json(root_output_dir / "manifest.json", manifest)
 
-    results_for_reporter = [asdict(a) for a in artifacts]
-
-    output_results(
-        mode="collect",
-        results=results_for_reporter,
-        output_format=output_format,
-        output_path=str(root_output_dir / "results.txt") if output_format == "text" else str(root_output_dir / "results.json"),
-    )
-
-    return results_for_reporter
+    return [asdict(a) for a in artifacts]
