@@ -929,5 +929,27 @@ def run_collection(
         _archive_directory(root_output_dir, archive_path)
         manifest["archive_path"] = str(archive_path)
         _write_json(root_output_dir / "manifest.json", manifest)
+    
+    print("\n" + "=" * 80)
+    print("[+] TENAX COLLECTION COMPLETE")
+    print("=" * 80)
+
+    print(f"[+] Mode: {options.mode}")
+    print(f"[+] Host: {host}")
+    print(f"[+] Output Directory: {root_output_dir}")
+
+    if options.copy_files or options.copy_references:
+        print(f"[+] Artifacts copied to:")
+        print(f"    - {root_output_dir / 'collected' / 'direct'}")
+        print(f"    - {root_output_dir / 'collected' / 'referenced'}")
+
+    print(f"[+] Manifest: {root_output_dir / 'manifest.json'}")
+    print(f"[+] Summary: {root_output_dir / 'summary.txt'}")
+
+    if options.archive:
+        archive_path = root_output_dir.parent / f"{collection_id}.tgz"
+        print(f"[+] Archive: {archive_path}")
+
+    print("=" * 80 + "\n")
 
     return [asdict(a) for a in artifacts]
