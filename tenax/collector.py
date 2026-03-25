@@ -36,6 +36,7 @@ TEXT_PREVIEW_CHARS = 400
 DEFAULT_HASH_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_TEXT_CAPTURE_MAX_BYTES = 2 * 1024 * 1024
 DEFAULT_REFERENCE_DEPTH = 2
+DEFAULT_LOCATION_TREE_DEPTH = 4
 DEFAULT_EXCLUDE_PATTERNS = (
     "/proc/",
     "/sys/",
@@ -63,6 +64,119 @@ CHECK_REGISTRY: dict[str, Callable[..., list[dict[str, Any]]]] = {
     "containers": collect_container_locations,
     "environment_hooks": collect_environment_hook_locations,
     "capabilities": collect_capabilities,
+}
+
+WATCHED_LOCATION_PATHS: dict[str, list[str]] = {
+    "cron": [
+        "/etc/crontab",
+        "/etc/cron.d",
+        "/etc/cron.daily",
+        "/etc/cron.hourly",
+        "/etc/cron.monthly",
+        "/etc/cron.weekly",
+        "/var/spool/cron",
+        "/var/spool/cron/crontabs",
+    ],
+    "systemd": [
+        "/etc/systemd/system",
+        "/lib/systemd/system",
+        "/usr/lib/systemd/system",
+    ],
+    "shell_profiles": [
+        "/etc/profile",
+        "/etc/bash.bashrc",
+        "/etc/zsh/zshrc",
+        "/etc/zshrc",
+        "/etc/profile.d",
+        "/etc/skel/.bashrc",
+        "/etc/skel/.profile",
+        "/etc/skel/.zshrc",
+        str(Path.home() / ".bashrc"),
+        str(Path.home() / ".bash_profile"),
+        str(Path.home() / ".profile"),
+        str(Path.home() / ".zprofile"),
+        str(Path.home() / ".zshrc"),
+    ],
+    "ssh": [
+        "/etc/ssh",
+        "/root/.ssh",
+        str(Path.home() / ".ssh"),
+    ],
+    "sudoers": [
+        "/etc/sudoers",
+        "/etc/sudoers.d",
+    ],
+    "rc_init": [
+        "/etc/init.d",
+        "/etc/rc.d",
+        "/etc/rc.local",
+    ],
+    "tmp_paths": [
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/run/shm",
+    ],
+    "ld_preload": [
+        "/etc/ld.so.preload",
+        "/etc/ld.so.conf",
+        "/etc/ld.so.conf.d",
+        str(Path.home() / ".bashrc"),
+        str(Path.home() / ".profile"),
+        str(Path.home() / ".zshrc"),
+    ],
+    "autostart_hooks": [
+        "/etc/xdg/autostart",
+        str(Path.home() / ".config/autostart"),
+    ],
+    "network_hooks": [
+        "/etc/NetworkManager",
+        "/etc/network",
+        "/etc/netplan",
+        "/etc/systemd/network",
+        "/etc/ppp",
+        "/etc/resolv.conf",
+        "/etc/hosts",
+        "/etc/hostname",
+        "/usr/lib/NetworkManager",
+        "/usr/lib/systemd/network",
+        "/lib/systemd/network",
+        str(Path.home() / ".config/NetworkManager"),
+    ],
+    "pam": [
+        "/etc/pam.d",
+    ],
+    "at_jobs": [
+        "/var/spool/cron/atjobs",
+        "/var/spool/at",
+        "/var/spool/atjobs",
+    ],
+    "containers": [
+        "/etc/docker",
+        "/var/lib/docker",
+        "/etc/containerd",
+        "/var/lib/containerd",
+        "/etc/podman",
+        "/var/lib/podman",
+    ],
+    "environment_hooks": [
+        "/etc/profile",
+        "/etc/environment",
+        "/etc/bash.bashrc",
+        "/etc/profile.d",
+        "/etc/zsh/zshrc",
+        "/etc/zshrc",
+        str(Path.home() / ".bashrc"),
+        str(Path.home() / ".bash_profile"),
+        str(Path.home() / ".profile"),
+        str(Path.home() / ".zshrc"),
+    ],
+    "capabilities": [
+        "/usr/bin",
+        "/usr/sbin",
+        "/bin",
+        "/sbin",
+    ],
 }
 
 REFERENCE_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
@@ -354,12 +468,21 @@ def _extract_module_metadata(raw: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in raw.items() if k not in ignored}
 
 
-def _copy_preserve_path(src: Path, dst_root: Path, namespace: str) -> CopyStatus:
+def _sanitize_path_component(path_str: str) -> str:
+    return path_str.strip("/").replace("/", "_").replace(":", "")
+
+
+def _copy_preserve_path(src: Path, dst_root: Path, module: str) -> CopyStatus:
     copy_status = CopyStatus()
     try:
-        relative = src.as_posix().lstrip("/")
-        dst = dst_root / namespace / relative
+        base_dir = dst_root / "collected" / module
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_path = _sanitize_path_component(str(src.parent))
+        dst = base_dir / safe_path / src.name
+
         dst.parent.mkdir(parents=True, exist_ok=True)
+
         if src.is_symlink():
             target = os.readlink(src)
             if dst.exists() or dst.is_symlink():
@@ -367,9 +490,10 @@ def _copy_preserve_path(src: Path, dst_root: Path, namespace: str) -> CopyStatus
             os.symlink(target, dst)
         else:
             shutil.copy2(src, dst)
+
         copy_status.copied = True
         copy_status.copied_to = str(dst)
-        copy_status.archive_member_path = f"{namespace}/{relative}"
+        copy_status.archive_member_path = str(dst.relative_to(dst_root))
         return copy_status
     except Exception:
         return copy_status
@@ -425,6 +549,91 @@ def _should_follow_reference(ref: ReferenceRecord, options: CollectionOptions) -
     if _should_skip_path(ref.value, options.exclude_patterns):
         return False
     return True
+
+def _format_permissions(path: Path) -> str:
+    stat_info = _safe_stat(path, follow_symlinks=False)
+    if stat_info is None:
+        return "unknown"
+    return oct(stat_info.st_mode & 0o777)
+
+
+def _format_owner(path: Path) -> str:
+    stat_info = _safe_stat(path, follow_symlinks=False)
+    if stat_info is None:
+        return "unknown"
+    return _safe_owner(stat_info.st_uid) or "unknown"
+
+
+def _tree_label(path: Path) -> str:
+    try:
+        if path.is_dir():
+            return f"{path.name}/" if path.name else str(path)
+        return path.name or str(path)
+    except Exception:
+        return path.name or str(path)
+
+
+def _build_location_tree(
+    path: Path,
+    indent: int = 0,
+    max_depth: int = DEFAULT_LOCATION_TREE_DEPTH,
+) -> list[str]:
+    lines: list[str] = []
+    prefix = "    " * indent
+
+    if not path.exists():
+        lines.append(f"{prefix}{path}  (Missing)")
+        return lines
+
+    name = str(path) if indent == 0 else _tree_label(path)
+    perm = _format_permissions(path)
+    owner = _format_owner(path)
+    kind = "Directory" if path.is_dir() else "File"
+
+    if indent == 0:
+        lines.append(f"{name}  (Permissions) {perm}  (Creator) {owner}")
+    else:
+        lines.append(f"{prefix}----{name}  (Permissions) {perm}  (Creator) {owner}")
+
+    if not path.is_dir():
+        return lines
+
+    if indent >= max_depth:
+        return lines
+
+    try:
+        children = sorted(
+            list(path.iterdir()),
+            key=lambda p: (not p.is_dir(), p.name.lower()),
+        )
+    except Exception:
+        lines.append(f"{prefix}    ----[Permission Denied]")
+        return lines
+
+    for child in children:
+        lines.extend(_build_location_tree(child, indent=indent + 1, max_depth=max_depth))
+
+    return lines
+
+
+def _build_watched_locations_inventory(modules: list[str]) -> dict[str, list[str]]:
+    inventory: dict[str, list[str]] = {}
+
+    for module in modules:
+        module_paths = WATCHED_LOCATION_PATHS.get(module, [])
+        module_lines: list[str] = []
+
+        for raw_path in module_paths:
+            path = Path(_normalize_path(raw_path))
+            module_lines.extend(_build_location_tree(path))
+            module_lines.append("")
+
+        while module_lines and module_lines[-1] == "":
+            module_lines.pop()
+
+        inventory[module] = module_lines
+
+    return inventory
 
 
 def _ingest_direct_artifact(
@@ -491,7 +700,7 @@ def _ingest_direct_artifact(
 
     copy_status = CopyStatus()
     if options.copy_files and evidence_root and exists and (is_file or is_symlink):
-        copy_status = _copy_preserve_path(path, evidence_root, "collected/direct")
+        copy_status = _copy_preserve_path(path, evidence_root, module)
 
     artifact = ArtifactRecord(
         id=f"artifact-{artifact_index:06d}",
@@ -628,9 +837,7 @@ def _ingest_reference_artifact(
 
     copy_status = CopyStatus()
     if options.copy_references and evidence_root and (is_file or is_symlink):
-        copy_status = _copy_preserve_path(path, evidence_root, "collected/referenced")
-        ref.copied = copy_status.copied
-        ref.copy_path = copy_status.copied_to
+        copy_status = _copy_preserve_path(path, evidence_root, f"{ref.parent_module}_reference")
 
     artifact = ArtifactRecord(
         id=f"artifact-{artifact_index:06d}",
@@ -663,8 +870,9 @@ def _ingest_reference_artifact(
         errors=[],
     )
     ref.followed = True
+    ref.copied = copy_status.copied
+    ref.copy_path = copy_status.copied_to
     return artifact, nested_refs, errors
-
 
 def _summarize(artifacts: list[ArtifactRecord], references: list[ReferenceRecord], errors: list[dict[str, Any]]) -> dict[str, Any]:
     direct_count = sum(1 for a in artifacts if a.discovery_mode == "direct")
@@ -707,6 +915,7 @@ def _write_summary(
     baseline_name: str | None,
     summary: dict[str, Any],
     artifacts: list[ArtifactRecord],
+    location_inventory: dict[str, list[str]],
 ) -> None:
     lines: list[str] = []
     lines.append("=== TENAX COLLECT SUMMARY ===")
@@ -730,6 +939,12 @@ def _write_summary(
     for module_name, count in sorted(summary["module_counts"].items()):
         lines.append(f"{module_name}: {count}")
     lines.append("")
+    lines.append("--- Watched Locations Inventory ---")
+    for module, tree_lines in location_inventory.items():
+        lines.append(f"[{module}]")
+        for l in tree_lines:
+            lines.append(l)
+        lines.append("")
     lines.append("--- Collected Artifacts ---")
     for artifact in artifacts:
         lines.append(f"[{artifact.id}] {artifact.module} | {artifact.artifact_type}")
@@ -803,8 +1018,6 @@ def run_collection(
     evidence_root = None
     if options.copy_files or options.copy_references or options.archive:
         evidence_root = root_output_dir
-        (root_output_dir / "collected" / "direct").mkdir(parents=True, exist_ok=True)
-        (root_output_dir / "collected" / "referenced").mkdir(parents=True, exist_ok=True)
 
     artifacts: list[ArtifactRecord] = []
     references: list[ReferenceRecord] = []
@@ -880,6 +1093,7 @@ def run_collection(
                 queue.append(nested_ref)
 
     summary = _summarize(artifacts, references, errors)
+    location_inventory = _build_watched_locations_inventory(options.modules)
 
     manifest = {
         "collection_id": collection_id,
@@ -888,21 +1102,6 @@ def run_collection(
         "host": host,
         "user": user,
         "baseline_name": options.baseline_name,
-        "options": {
-            "mode": options.mode,
-            "modules": options.modules,
-            "hash_files": options.hash_files,
-            "content": options.content,
-            "copy_files": options.copy_files,
-            "archive": options.archive,
-            "follow_references": options.follow_references,
-            "parse_references": options.parse_references,
-            "copy_references": options.copy_references,
-            "max_file_size": options.max_file_size,
-            "max_hash_size": options.max_hash_size,
-            "max_reference_depth": options.max_reference_depth,
-            "exclude_patterns": list(options.exclude_patterns),
-        },
         "summary": summary,
         "artifacts": [asdict(a) for a in artifacts],
         "references": [asdict(r) for r in references],
@@ -915,41 +1114,25 @@ def run_collection(
     _write_hashes(root_output_dir / "hashes.txt", artifacts)
     _write_summary(
         root_output_dir / "summary.txt",
-        collection_id=collection_id,
-        mode=options.mode,
-        host=host,
-        user=user,
-        baseline_name=options.baseline_name,
-        summary=summary,
-        artifacts=artifacts,
+        collection_id,
+        options.mode,
+        host,
+        user,
+        options.baseline_name,
+        summary,
+        artifacts,
+        location_inventory,
     )
 
     if options.archive:
         archive_path = root_output_dir.parent / f"{collection_id}.tgz"
         _archive_directory(root_output_dir, archive_path)
-        manifest["archive_path"] = str(archive_path)
-        _write_json(root_output_dir / "manifest.json", manifest)
-    
+
     print("\n" + "=" * 80)
     print("[+] TENAX COLLECTION COMPLETE")
     print("=" * 80)
-
-    print(f"[+] Mode: {options.mode}")
-    print(f"[+] Host: {host}")
     print(f"[+] Output Directory: {root_output_dir}")
-
-    if options.copy_files or options.copy_references:
-        print(f"[+] Artifacts copied to:")
-        print(f"    - {root_output_dir / 'collected' / 'direct'}")
-        print(f"    - {root_output_dir / 'collected' / 'referenced'}")
-
-    print(f"[+] Manifest: {root_output_dir / 'manifest.json'}")
-    print(f"[+] Summary: {root_output_dir / 'summary.txt'}")
-
-    if options.archive:
-        archive_path = root_output_dir.parent / f"{collection_id}.tgz"
-        print(f"[+] Archive: {archive_path}")
-
+    print(f"[+] Artifacts: {len(artifacts)}")
     print("=" * 80 + "\n")
 
     return [asdict(a) for a in artifacts]
