@@ -188,6 +188,66 @@ def _render_analyze_finding(index: int, item: dict[str, Any]) -> list[str]:
 
     return lines
 
+def _render_collect_text(results) -> str:
+    lines: list[str] = []
+
+    lines.append("=== TENAX COLLECT RESULTS ===")
+    lines.append("")
+
+    if not results:
+        lines.append("No collection results.")
+        return "\n".join(lines)
+
+    lines.append(f"Artifacts collected: {len(results)}")
+    lines.append("")
+
+    for idx, result in enumerate(results, start=1):
+        lines.append("=" * 100)
+        lines.append(f"[{idx}] {result.get('module', 'unknown').upper()} | {result.get('artifact_type', 'artifact')}")
+        lines.append(f"Path: {result.get('path', 'unknown')}")
+        lines.append(f"Discovery: {result.get('discovery_mode', 'unknown')}")
+
+        if result.get("discovered_from"):
+            lines.append(f"Discovered From: {result['discovered_from']}")
+
+        if result.get("reference_reason"):
+            lines.append(f"Reference Reason: {result['reference_reason']}")
+
+        if result.get("owner"):
+            lines.append(f"Owner: {result['owner']}")
+
+        if result.get("group"):
+            lines.append(f"Group: {result['group']}")
+
+        if result.get("mode"):
+            lines.append(f"Mode: {result['mode']}")
+
+        if result.get("size") is not None:
+            lines.append(f"Size: {result['size']}")
+
+        if result.get("sha256"):
+            lines.append(f"SHA256: {result['sha256']}")
+
+        if result.get("preview"):
+            lines.append(f"Preview: {result['preview']}")
+
+        copy_status = result.get("copy_status") or {}
+        if copy_status.get("copied") and copy_status.get("copied_to"):
+            lines.append(f"Copied To: {copy_status['copied_to']}")
+
+        references = result.get("references") or []
+        if references:
+            lines.append("References:")
+            for ref in references:
+                lines.append(
+                    f"  - [{ref.get('ref_type', 'unknown')}] {ref.get('value', 'unknown')} "
+                    f"(reason: {ref.get('reason', 'unknown')})"
+                )
+
+        lines.append("")
+
+    return "\n".join(lines)
+
 
 # ============================================================
 # SUMMARY
