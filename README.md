@@ -1,6 +1,6 @@
 # Tenax
 
-> Incident Response Tool/Playbook for Linux 
+> Incident Response Tool/Playbook for Linux Systems
 
 ---
 
