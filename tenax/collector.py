@@ -963,7 +963,6 @@ def _write_summary(
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
-
 def _archive_directory(source_dir: Path, archive_path: Path) -> None:
     with tarfile.open(archive_path, "w:gz") as tar:
         tar.add(source_dir, arcname=source_dir.name)
@@ -1124,6 +1123,7 @@ def run_collection(
         location_inventory,
     )
 
+    archive_path = None
     if options.archive:
         archive_path = root_output_dir.parent / f"{collection_id}.tgz"
         _archive_directory(root_output_dir, archive_path)
@@ -1131,7 +1131,22 @@ def run_collection(
     print("\n" + "=" * 80)
     print("[+] TENAX COLLECTION COMPLETE")
     print("=" * 80)
+    print(f"[+] Mode: {options.mode}")
+    print(f"[+] Host: {host}")
     print(f"[+] Output Directory: {root_output_dir}")
+    print(f"[+] Manifest: {root_output_dir / 'manifest.json'}")
+    print(f"[+] Summary: {root_output_dir / 'summary.txt'}")
+    print(f"[+] References: {root_output_dir / 'references.json'}")
+    print(f"[+] Errors: {root_output_dir / 'errors.json'}")
+    print(f"[+] Hashes: {root_output_dir / 'hashes.txt'}")
+
+    if options.copy_files or options.copy_references:
+        print("[+] Artifacts copied under:")
+        print(f"    - {root_output_dir / 'collected'}")
+
+    if archive_path is not None:
+        print(f"[+] Archive: {archive_path}")
+
     print(f"[+] Artifacts: {len(artifacts)}")
     print("=" * 80 + "\n")
 
