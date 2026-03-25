@@ -1,3 +1,17 @@
+from __future__ import annotations
+from tenax.banner import show_startup_banner
+
+import argparse
+from pathlib import Path
+
+from tenax.analyzer import run_analysis
+from tenax.collector import run_collection
+
+
+def _csv_to_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tenax",
@@ -211,3 +225,45 @@ Collection mode:
     )
 
     return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.command == "analyze":
+        show_startup_banner(duration=5.0)
+        run_analysis(
+            output_path=args.output,
+            output_format=args.format,
+            top=args.top,
+            severity=args.severity.upper() if args.severity else None,
+            sources=args.source,
+            path_contains=args.path_contains,
+            only_writable=args.only_writable,
+            only_existing=args.only_existing,
+            scope=args.scope,
+            sort_by=args.sort,
+            quiet=args.quiet,
+            verbose=args.verbose,
+        )
+    elif args.command == "collect":
+        show_startup_banner(duration=5.0)
+        run_collection(
+            output_path=args.output,
+            output_format=args.format,
+            hash_files=args.hash_files,
+            mode=args.mode,
+            modules=args.modules,
+            follow_references=not args.no_follow_references,
+            copy_files=args.copy_files,
+            copy_references=args.copy_references,
+            archive=args.archive,
+            baseline_name=args.baseline_name,
+            max_file_size=args.max_file_size,
+            max_hash_size=args.max_hash_size,
+            max_reference_depth=args.max_reference_depth,
+            exclude_patterns=tuple(args.exclude_path) if args.exclude_path else (),
+        )
+    else:
+        parser.print_help()
