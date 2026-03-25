@@ -89,7 +89,23 @@ def render_text(
     if mode == "analyze":
         return _render_analyze_text(results, metadata)
 
-    return _render_collect_text(results)
+    lines: list[str] = []
+    lines.append("=== TENAX RESULTS ===")
+    lines.append("")
+    lines.append(f"Mode: {mode}")
+    lines.append(f"Count: {len(results)}")
+
+    if not results:
+        lines.append("")
+        lines.append("No results found.")
+        return "\n".join(lines)
+
+    lines.append("")
+    for idx, item in enumerate(results[:5], start=1):
+        lines.append("=" * 100)
+        lines.append(f"[{idx}] {item.get('path', 'N/A')}")
+
+    return "\n".join(lines).rstrip()
 
 
 def _render_analyze_text(
