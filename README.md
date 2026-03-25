@@ -60,7 +60,7 @@ And displays the locations to analyze/triage, as well as the methods to do so.
 
 ---
 
-## 🔎 Example Output
+## 🔎 Example Output (Analyze)
 
 ```text
 === CRITICAL FINDINGS (3) ===
