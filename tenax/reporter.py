@@ -124,9 +124,13 @@ def _render_analyze_text(
     total_results = summary.get("consolidated_finding_count", len(results))
     shown_results = len(results)
 
+    summary_block = []
     if summary and not quiet:
-        lines.extend(_render_summary_block(summary))
+        summary_block = _render_summary_block(summary)
+
+        lines.extend(summary_block)
         lines.append("")
+
         lines.append(f"Showing top {shown_results} of {total_results} results")
         lines.append("Full results available in tenax/output/")
         lines.append("")
@@ -148,6 +152,13 @@ def _render_analyze_text(
         for index, item in enumerate(findings, start=1):
             lines.extend(_render_analyze_finding(index, item))
             lines.append("")
+
+    if summary_block:
+        lines.append("")
+        lines.append("=" * 80)
+        lines.append("SUMMARY (REPEATED)")
+        lines.append("=" * 80)
+        lines.extend(summary_block)
 
     return "\n".join(lines).rstrip()
 
