@@ -585,17 +585,19 @@ def _ingest_reference_artifact(
         return None, [], errors
 
     path = Path(resolved)
-    exists = path.exists() or path.is_symlink()
-    ref.exists = exists
-    if not exists:
-        return None, [], errors
 
     lstat_info = _safe_stat(path, follow_symlinks=False)
     stat_info = _safe_stat(path, follow_symlinks=True)
 
+    exists = bool(lstat_info or stat_info)
+    ref.exists = exists
+    if not exists:
+        return None, [], errors
+
     is_symlink = bool(lstat_info and path.is_symlink())
-    is_file = bool(path.is_file())
-    is_dir = bool(path.is_dir())
+    is_file = bool(stat_info and path.is_file())
+    is_dir = bool(stat_info and path.is_dir())
+
     if is_dir:
         return None, [], errors
 
