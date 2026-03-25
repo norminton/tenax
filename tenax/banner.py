@@ -106,4 +106,98 @@ def _grow_logo(total_duration: float = 4.0) -> None:
 def _crumble_logo(lines: list[str], frame_delay: float = 0.06) -> None:
     canvas, width, height = _make_canvas(lines, pad_x=10, pad_y=6)
 
-    particles: list[dict[str, int |
+    particles: list[dict[str, int | str]] = []
+
+    occupied_positions: list[tuple[int, int]] = []
+    for y in range(height):
+        for x in range(width):
+            if canvas[y][x] != " ":
+                occupied_positions.append((x, y))
+
+    random.shuffle(occupied_positions)
+
+    crumble_batches = max(18, len(occupied_positions) // 18)
+    batch_size = max(1, len(occupied_positions) // crumble_batches)
+
+    for i in range(0, len(occupied_positions), batch_size):
+        batch = occupied_positions[i:i + batch_size]
+
+        for x, y in batch:
+            if canvas[y][x] != " ":
+                particles.append(
+                    {
+                        "x": x,
+                        "y": y,
+                        "vx": random.choice([-1, 0, 0, 1]),
+                        "vy": 1,
+                        "char": random.choice([".", ",", "`", "'", "*"]),
+                    }
+                )
+                canvas[y][x] = " "
+
+        for _ in range(2):
+            next_canvas = [[" " for _ in range(width)] for _ in range(height)]
+            next_particles: list[dict[str, int | str]] = []
+
+            for particle in particles:
+                px = int(particle["x"])
+                py = int(particle["y"])
+
+                if 0 <= px < width and 0 <= py < height:
+                    next_canvas[py][px] = str(particle["char"])
+
+                nx = px + int(particle["vx"])
+                ny = py + int(particle["vy"])
+
+                if ny < height:
+                    particle["x"] = max(0, min(width - 1, nx))
+                    particle["y"] = ny
+                    next_particles.append(particle)
+
+            for y in range(height):
+                for x in range(width):
+                    if canvas[y][x] != " ":
+                        next_canvas[y][x] = canvas[y][x]
+
+            particles = next_particles
+            _render_canvas(next_canvas)
+            time.sleep(frame_delay)
+
+    while particles:
+        next_canvas = [[" " for _ in range(width)] for _ in range(height)]
+        next_particles: list[dict[str, int | str]] = []
+
+        for particle in particles:
+            px = int(particle["x"])
+            py = int(particle["y"])
+
+            if 0 <= px < width and 0 <= py < height:
+                next_canvas[py][px] = str(particle["char"])
+
+            nx = px + int(particle["vx"])
+            ny = py + int(particle["vy"])
+
+            if ny < height:
+                particle["x"] = max(0, min(width - 1, nx))
+                particle["y"] = ny
+                next_particles.append(particle)
+
+        particles = next_particles
+        _render_canvas(next_canvas)
+        time.sleep(frame_delay)
+
+    _clear_screen()
+
+
+def show_startup_banner(duration: float = 5.0) -> None:
+    try:
+        _hide_cursor()
+
+        _grow_logo(total_duration=4.0)
+
+        time.sleep(2.0)
+
+        _crumble_logo(LOGO_STAGES[-1], frame_delay=0.06)
+
+    finally:
+        _show_cursor()
