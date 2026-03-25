@@ -178,24 +178,65 @@ Key points:
 
 ```text
 tenax/
-├── cli.py              # CLI entry point
-├── analyzer.py         # Detection engine (analyze mode)
-├── collector.py        # Evidence collection engine
-├── reporter.py         # Output formatting (analyze)
-├── banner.py           # Startup animation
-├── checks/             # Detection + collection modules
-│   ├── cron.py
-│   ├── systemd.py
-│   ├── ssh.py
-│   ├── pam.py
-│   ├── shell_profiles.py
-│   ├── environment_hooks.py
-│   ├── network_hooks.py
-│   ├── tmp_paths.py
-│   ├── ld_preload.py
-│   └── ...
-docs/                   # Playbook + documentation
-tests/                  # Testing
-output/                 # Generated results
-tnx.py                  # Execution wrapper
+├── docs/
+│   ├── modules/
+│   │   ├── at-jobs.md
+│   │   ├── autostart-hooks.md
+│   │   ├── capabilities.md
+│   │   ├── containers.md
+│   │   ├── cron.md
+│   │   ├── environment-hooks.md
+│   │   ├── ld-preload.md
+│   │   ├── network-hooks.md
+│   │   ├── pam.md
+│   │   ├── rc-init.md
+│   │   ├── shell-profiles.md
+│   │   ├── ssh.md
+│   │   ├── sudoers.md
+│   │   ├── systemd.md
+│   │   └── tmp-paths.md
+│   ├── README.md
+│   ├── analyst-guide.md
+│   ├── apt-tradecraft-notes.md
+│   ├── attack-mapping.md
+│   ├── false-positives.md
+│   ├── methodology.md
+│   └── triage-principles.md
+├── output/
+├── tenax/
+│   ├── checks/
+│   │   ├── __init__.py
+│   │   ├── at_jobs.py
+│   │   ├── autostart_hooks.py
+│   │   ├── capabilities.py
+│   │   ├── containers.py
+│   │   ├── cron.py
+│   │   ├── environment_hooks.py
+│   │   ├── ld_preload.py
+│   │   ├── network_hooks.py
+│   │   ├── pam.py
+│   │   ├── rc_init.py
+│   │   ├── shell_profiles.py
+│   │   ├── ssh.py
+│   │   ├── sudoers.py
+│   │   ├── systemd.py
+│   │   └── tmp_paths.py
+│   ├── __init__.py
+│   ├── analyzer.py
+│   ├── banner.py
+│   ├── cli.py
+│   ├── collector.py
+│   ├── reporter.py
+│   └── utils.py
+├── tests/
+│   ├── test_cron.py
+│   ├── test_scoring.py
+│   └── test_systemd.py
+├── .gitignore
+├── LICENSE
+├── README.md
+├── config.yaml
+├── main.py
+├── requirements.txt
+└── setup.py
 ```
