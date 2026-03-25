@@ -352,5 +352,8 @@ def show_startup_banner(duration: float = 5.0) -> None:
         _grow_logo(total_duration=2.5)
         time.sleep(2.0)
         _crumble_logo(LOGO_STAGES[-1], frame_delay=0.05)
+        _clear_screen()
+        sys.stdout.write("\033[H")
+        sys.stdout.flush()
     finally:
         _show_cursor()
