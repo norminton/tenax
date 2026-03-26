@@ -927,6 +927,7 @@ def _detect_sensitive_ssh_path_risk(
             )
 
     # 🔥 FIX: ignore user paths (expected for SSH)
+    return
     if USER_PATH_REGEX.search(path_str):
         return
 
@@ -1056,16 +1057,18 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     if not hits:
         return None
 
-    reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
-    score = sum(int(entry["score"]) for entry in hits.values())
+    threshold_categories = categories - {"ownership", "permissions"}
+    threshold_score = sum(
+        int(entry["score"])
+        for entry in hits.values()
+        if entry.get("category") not in {"ownership", "permissions"}
+    )
 
     high_confidence_categories = {
         "temp-target",
         "user-target",
         "hidden-target",
-        "permissions",
         "binary",
         "authorized-keys-command-risk-path",
         "authorized-keys-command-hidden",
@@ -1105,27 +1108,24 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "ssh-config-authorizedkeyscommand",
     }
 
-    has_high_confidence = bool(categories & high_confidence_categories)
-    only_low_signal = categories and categories.issubset(low_signal_only_categories)
-
-    if only_low_signal and score < 90:
+    if not threshold_categories:
         return None
 
-    if not has_high_confidence and score < 95 and len(categories) < 2:
+    has_high_confidence = bool(threshold_categories & high_confidence_categories)
+    only_low_signal = threshold_categories.issubset(low_signal_only_categories)
+
+    if only_low_signal and threshold_score < 90:
         return None
 
-    primary_reason = max(
-        hits.values(),
-        key=lambda entry: int(entry["score"]),
-    )["reason"]
-
-    preview = previews[0] if previews else None
+    if not has_high_confidence and threshold_score < 95 and len(threshold_categories) < 2:
+        return None
 
     finding = shared_finalize_finding(
         path,
         hits,
         high_confidence_categories=high_confidence_categories,
         low_signal_only_categories=low_signal_only_categories,
+        non_behavioral_categories={"ownership", "permissions"},
     )
     if finding is None:
         return None

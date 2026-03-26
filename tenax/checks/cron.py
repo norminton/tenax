@@ -895,8 +895,6 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "temp-target",
         "user-target",
         "hidden-target",
-        "ownership",
-        "permissions",
         "binary",
         "download-exec",
         "reverse-shell",
@@ -926,6 +924,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         hits,
         high_confidence_categories=high_confidence_categories,
         low_signal_only_categories=low_signal_only_categories,
+        non_behavioral_categories={"ownership", "permissions"},
     )
 
 

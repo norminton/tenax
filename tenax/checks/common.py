@@ -97,6 +97,31 @@ def severity_from_score(score: int) -> str:
     return "INFO"
 
 
+def _select_investigator_preview(hits: dict[str, dict[str, Any]]) -> str | None:
+    best_preview: str | None = None
+    best_rank: tuple[int, int, int] | None = None
+
+    for entry in hits.values():
+        preview = entry.get("preview")
+        if not preview:
+            continue
+
+        preview_text = str(preview)
+        score = int(entry.get("score", 0))
+        category = str(entry.get("category", ""))
+        rank = (
+            1 if preview_text.lower().startswith("line ") else 0,
+            0 if category in {"ownership", "permissions"} else 1,
+            score,
+        )
+
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
+            best_preview = preview_text
+
+    return best_preview
+
+
 def finalize_finding(
     path: Path,
     hits: dict[str, dict[str, Any]],
@@ -105,28 +130,38 @@ def finalize_finding(
     low_signal_only_categories: set[str] | None = None,
     minimum_score_without_high_confidence: int = 95,
     minimum_categories_without_high_confidence: int = 2,
+    non_behavioral_categories: set[str] | None = None,
     mode: str = "strict",
 ) -> dict[str, Any] | None:
     if not hits:
         return None
 
     reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
+    non_behavioral_categories = non_behavioral_categories or set()
+
+    threshold_entries = [
+        entry for entry in hits.values() if entry.get("category") not in non_behavioral_categories
+    ]
+    threshold_categories = {entry["category"] for entry in threshold_entries}
+    threshold_score = sum(int(entry["score"]) for entry in threshold_entries)
 
     if mode == "strict":
-        low_signal_only_categories = low_signal_only_categories or set()
-        has_high_confidence = bool(categories & high_confidence_categories)
-        only_low_signal = categories and categories.issubset(low_signal_only_categories)
+        if not threshold_categories:
+            return None
 
-        if only_low_signal and score < 90:
+        low_signal_only_categories = low_signal_only_categories or set()
+        has_high_confidence = bool(threshold_categories & high_confidence_categories)
+        only_low_signal = threshold_categories.issubset(low_signal_only_categories)
+
+        if only_low_signal and threshold_score < 90:
             return None
 
         if (
             not has_high_confidence
-            and score < minimum_score_without_high_confidence
-            and len(categories) < minimum_categories_without_high_confidence
+            and threshold_score < minimum_score_without_high_confidence
+            and len(threshold_categories) < minimum_categories_without_high_confidence
         ):
             return None
 
@@ -135,7 +170,7 @@ def finalize_finding(
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else None
+    preview = _select_investigator_preview(hits)
 
     return {
         "path": str(path),
