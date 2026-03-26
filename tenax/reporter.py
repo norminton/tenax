@@ -29,6 +29,7 @@ def output_results(
         explicit_output_file = output_path / f"{mode}_{timestamp}.{extension}" if output_path.is_dir() else output_path
 
     full_render = _render(mode, results, output_format, metadata)
+    auto_output_file.parent.mkdir(parents=True, exist_ok=True)
     auto_output_file.write_text(full_render, encoding="utf-8")
 
     if explicit_output_file:

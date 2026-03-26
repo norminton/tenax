@@ -13,6 +13,7 @@ from tenax.checks.common import (
     record_hit as shared_record_hit,
     safe_lstat as shared_safe_lstat,
     safe_stat as shared_safe_stat,
+    safe_walk as shared_safe_walk,
     severity_from_score,
     with_line_number as shared_with_line_number,
 )
@@ -181,6 +182,13 @@ CRON_JOB_REGEX = re.compile(
 )
 
 COMMENT_REGEX = re.compile(r"^\s*#")
+
+CRON_METADATA_PREFIXES = (
+    "mailto=",
+    "shell=",
+    "path=",
+    "home=",
+)
 
 
 def analyze_cron_locations() -> list[dict[str, Any]]:
@@ -423,6 +431,106 @@ def _detect_download_behavior(
                 preview=_with_line_number(line_number, line),
                 category="download-to-risk-path",
             )
+
+
+def _detect_schedule_risk(
+    hits: dict[str, dict[str, Any]],
+    line: str,
+    line_number: int,
+) -> None:
+    if AT_REBOOT_REGEX.search(line):
+        _record_hit(
+            hits,
+            reason="Cron persistence is configured to run at reboot",
+            score=55,
+            preview=_with_line_number(line_number, line),
+            category="suspicious-schedule",
+        )
+        return
+
+    for regex in FREQUENT_SCHEDULE_REGEXES:
+        if regex.search(line):
+            _record_hit(
+                hits,
+                reason="Cron persistence uses a high-frequency execution schedule",
+                score=45,
+                preview=_with_line_number(line_number, line),
+                category="suspicious-schedule",
+            )
+            return
+
+
+def _detect_mailto_abuse(
+    hits: dict[str, dict[str, Any]],
+    line: str,
+    line_number: int,
+) -> None:
+    match = MAILTO_REGEX.match(line)
+    if not match:
+        return
+
+    value = match.group(1).strip().strip("'\"").lower()
+    if value in {"", "root"}:
+        return
+
+    _record_hit(
+        hits,
+        reason="Cron configuration redirects MAILTO away from the default administrative recipient",
+        score=10,
+        preview=_with_line_number(line_number, line),
+        category="mailto",
+    )
+
+
+def _detect_shell_abuse(
+    hits: dict[str, dict[str, Any]],
+    line: str,
+    line_number: int,
+) -> None:
+    match = SHELL_REGEX.match(line)
+    if not match:
+        return
+
+    value = match.group(1).strip().strip("'\"")
+    value_lower = value.lower()
+
+    if _path_startswith_any(value_lower, TEMP_PATH_PATTERNS):
+        _record_hit(
+            hits,
+            reason="Cron configuration sets SHELL to a temporary path",
+            score=90,
+            preview=_with_line_number(line_number, line),
+            category="shell-temp",
+        )
+        return
+
+    if USER_PATH_REGEX.search(value):
+        _record_hit(
+            hits,
+            reason="Cron configuration sets SHELL to a user-controlled path",
+            score=85,
+            preview=_with_line_number(line_number, line),
+            category="shell-user",
+        )
+        return
+
+    if HIDDEN_PATH_REGEX.search(value):
+        _record_hit(
+            hits,
+            reason="Cron configuration sets SHELL to a hidden path",
+            score=80,
+            preview=_with_line_number(line_number, line),
+            category="shell-hidden",
+        )
+
+
+def _extract_cron_command(line: str) -> str | None:
+    match = CRON_JOB_REGEX.match(line)
+    if not match:
+        return None
+
+    command = match.group("command").strip()
+    return command or None
 
 
 def _detect_pipe_to_interpreter(
@@ -840,6 +948,10 @@ def _safe_iterdir(path: Path) -> list[Path]:
         return list(path.iterdir())
     except Exception:
         return []
+
+
+def _safe_walk(base: Path) -> list[Path]:
+    return shared_safe_walk(base)
 
 
 def _safe_stat(path: Path):

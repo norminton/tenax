@@ -98,7 +98,7 @@ def test_shared_collect_record_shapes_metadata(tmp_path: Path) -> None:
 
 
 def test_repository_root_packaging_exposes_tenax_console_script() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[1]
     pyproject_path = repo_root / "pyproject.toml"
 
     assert pyproject_path.exists()

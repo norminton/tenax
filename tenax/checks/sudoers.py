@@ -116,6 +116,16 @@ STEALTH_PERSISTENCE_REGEXES = [
     re.compile(r"\bchattr\b\s+\+i\b", re.IGNORECASE),
 ]
 
+LD_HIJACK_REGEX = re.compile(
+    r"\b(LD_PRELOAD|LD_LIBRARY_PATH)\s*=\s*['\"]?([^'\"\s]+)",
+    re.IGNORECASE,
+)
+
+PATH_HIJACK_REGEX = re.compile(
+    r"\b(?:PATH|secure_path)\s*=\s*['\"]?([^'\"\n]+)",
+    re.IGNORECASE,
+)
+
 NOPASSWD_ALL_REGEX = re.compile(r"\bNOPASSWD\s*:\s*ALL\b", re.IGNORECASE)
 NOPASSWD_REGEX = re.compile(r"\bNOPASSWD\s*:", re.IGNORECASE)
 NOAUTH_REGEX = re.compile(r"\b!authenticate\b", re.IGNORECASE)

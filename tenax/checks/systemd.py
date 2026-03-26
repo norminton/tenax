@@ -13,6 +13,7 @@ from tenax.checks.common import (
     record_hit as shared_record_hit,
     safe_lstat as shared_safe_lstat,
     safe_stat as shared_safe_stat,
+    safe_walk as shared_safe_walk,
     severity_from_score,
     with_line_number as shared_with_line_number,
 )
@@ -183,6 +184,7 @@ TIMER_KEYS = {
 PERSISTENT_TIMER_REGEX = re.compile(r"^Persistent\s*=\s*true$", re.IGNORECASE)
 
 UNIT_DIRECTIVE_REGEX = re.compile(r"^([A-Za-z][A-Za-z0-9]+)\s*=\s*(.+)$")
+WANTED_BY_REGEX = re.compile(r"^WantedBy\s*=\s*(.+)$", re.IGNORECASE)
 
 
 def analyze_systemd_locations() -> list[dict[str, Any]]:
@@ -396,7 +398,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
         _detect_inline_payload_behaviors(hits, stripped, line_number)
         _detect_ld_hijack(hits, stripped, line_number)
         _detect_path_hijack(hits, stripped, line_number)
-        _detect_stealth_or_privilege_changes(hits, stripped, line_number)
+        _detect_stealth_or_privilege_changes(hits, stripped, stripped.lower(), line_number)
         _detect_process_detach(hits, stripped, line_number)
 
     _apply_compound_behavior_bonuses(hits)
@@ -1040,6 +1042,10 @@ def _safe_iterdir(path: Path) -> list[Path]:
         return list(path.iterdir())
     except Exception:
         return []
+
+
+def _safe_walk_systemd(base: Path) -> list[Path]:
+    return shared_safe_walk(base)
 
 
 def _safe_stat(path: Path):

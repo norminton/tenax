@@ -950,7 +950,11 @@ def _detect_sensitive_ssh_path_risk(
         )
 
 def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
-    categories = {entry["category"] for entry in hits.values()}
+    categories = {
+        str(entry["category"])
+        for entry in hits.values()
+        if isinstance(entry, dict) and entry.get("category")
+    }
 
     if any("download" in category for category in categories) and any(
         category in {

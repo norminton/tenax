@@ -462,6 +462,11 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rule_id = item.get("rule_id") or _build_rule_id(primary_source, tags)
         rule_name = item.get("rule_name") or _build_rule_name(primary_source, tags)
 
+        path_values = sorted(
+            set(_ensure_list_of_strings(item.get("path_variants")))
+            | set(_ensure_list_of_strings(item.get("path")))
+        )
+
         consolidated_item = {
             **item,
             "schema_version": FINDING_SCHEMA_VERSION,
@@ -483,16 +488,19 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "source_count": len(sources),
             },
             "normalized_path": normalized_path,
-            "paths": sorted(set(_ensure_list_of_strings(item.get("path_variants")) | set(_ensure_list_of_strings(item.get("path"))))),
+            "paths": path_values,
             "evidence": {
                 "preview": item.get("preview"),
                 "reasons": reasons,
-                "paths": sorted(set(_ensure_list_of_strings(item.get("path_variants")) | set(_ensure_list_of_strings(item.get("path"))))),
+                "paths": path_values,
             },
             "dedupe": {
                 "merged_count": int(item.get("dedupe_count", 1)),
                 "sources": sources,
-                "rule_ids": sorted(set(_ensure_list_of_strings(item.get("rule_ids")) | set(_ensure_list_of_strings(rule_id)))),
+                "rule_ids": sorted(
+                    set(_ensure_list_of_strings(item.get("rule_ids")))
+                    | set(_ensure_list_of_strings(rule_id))
+                ),
             },
             "finding_key": item.get("finding_key") or _finding_identity(primary_source, normalized_path, primary_reason),
         }
