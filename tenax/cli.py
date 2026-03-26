@@ -1,10 +1,10 @@
 from __future__ import annotations
-from tenax.banner import show_startup_banner
 
 import argparse
 from pathlib import Path
 
 from tenax.analyzer import run_analysis
+from tenax.banner import show_startup_banner
 from tenax.collector import run_collection
 
 
@@ -48,6 +48,11 @@ EXAMPLES:
         choices=["text", "json"],
         default="text",
         help="Output format: text or json.",
+    )
+    analyze_general.add_argument(
+        "--root-prefix",
+        type=Path,
+        help="Analyze a mounted or offline target root instead of the live host root.",
     )
     analyze_general.add_argument(
         "--top",
@@ -95,6 +100,11 @@ EXAMPLES:
 
     analyze_behavior = analyze_parser.add_argument_group("Display / Runtime Options")
     analyze_behavior.add_argument(
+        "--banner",
+        action="store_true",
+        help="Show the startup banner before running.",
+    )
+    analyze_behavior.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress analyzer summary printing and emit only final output.",
@@ -109,20 +119,17 @@ EXAMPLES:
         "collect",
         help="Collect persistence-related artifacts for analyst review.",
         description="""
-Collect persistence artifacts in multiple modes.
+Collect persistence artifacts using an explicit collection contract.
 
 MODES:
-  inventory  -> metadata only (fast, baseline-friendly)
-  parsed     -> structured + readable output
-  evidence   -> parsed output + copied files + reference-aware collection
-  archive    -> evidence collection packaged into a .tgz archive
+  minimal    -> preservation-oriented bundle with copied direct and execution-linked artifacts
+  structured -> investigator-grade parsed records without copying by default
+  evidence   -> structured records plus copied direct and followed reference artifacts
 
 EXAMPLES:
-  tenax collect
-  tenax collect --mode inventory
-  tenax collect --mode parsed --modules ssh,pam,shell_profiles
-  tenax collect --mode evidence --copy-files --copy-references
-  tenax collect --mode archive --archive
+  tenax collect --mode minimal
+  tenax collect --mode structured --modules ssh,pam,shell_profiles
+  tenax collect --mode evidence --archive
 """,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -135,33 +142,43 @@ EXAMPLES:
         help="Optional output directory.",
     )
     collect_general.add_argument(
-        "--format",
-        choices=["text", "json"],
-        default="text",
-        help="Output format: text or json.",
+        "--root-prefix",
+        type=Path,
+        help="Collect from a mounted or offline target root instead of the live host root.",
     )
     collect_general.add_argument(
         "--hash",
         action="store_true",
         dest="hash_files",
-        help="Calculate SHA256 hashes for collected files.",
+        default=True,
+        help="Calculate SHA256 hashes for collected files (enabled by default).",
+    )
+    collect_general.add_argument(
+        "--no-hash",
+        action="store_false",
+        dest="hash_files",
+        help="Disable SHA256 hashing for collected files.",
     )
     collect_general.add_argument(
         "--baseline-name",
         help="Optional baseline label for this collection run.",
     )
+    collect_general.add_argument(
+        "--banner",
+        action="store_true",
+        help="Show the startup banner before running.",
+    )
 
     collect_modes = collect_parser.add_argument_group("Collection Modes")
     collect_modes.add_argument(
         "--mode",
-        choices=["inventory", "parsed", "evidence", "archive"],
-        default="parsed",
+        choices=["minimal", "structured", "evidence"],
+        required=True,
         help="""
 Collection mode:
-  inventory -> metadata only
-  parsed    -> structured + readable output
-  evidence  -> includes copied files + references
-  archive   -> full collection packaged as .tgz
+  minimal    -> preservation-oriented copied artifact set
+  structured -> parsed investigator-grade records
+  evidence   -> parsed records plus copied artifact bundle
 """,
     )
 
@@ -176,12 +193,7 @@ Collection mode:
     collect_references.add_argument(
         "--no-follow-references",
         action="store_true",
-        help="Disable following referenced file paths discovered during collection.",
-    )
-    collect_references.add_argument(
-        "--copy-references",
-        action="store_true",
-        help="Copy reference-discovered artifacts into the output bundle.",
+        help="Disable opportunistic secondary reference recursion. Direct execution-linked references are still collected.",
     )
     collect_references.add_argument(
         "--max-reference-depth",
@@ -189,13 +201,7 @@ Collection mode:
         default=2,
         help="Maximum recursion depth for reference following.",
     )
-
     collect_files = collect_parser.add_argument_group("File Handling")
-    collect_files.add_argument(
-        "--copy-files",
-        action="store_true",
-        help="Copy directly collected artifacts into the output bundle.",
-    )
     collect_files.add_argument(
         "--max-file-size",
         type=int,
@@ -232,7 +238,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "analyze":
-        show_startup_banner(duration=5.0)
+        if args.banner:
+            show_startup_banner(duration=5.0)
         run_analysis(
             output_path=args.output,
             output_format=args.format,
@@ -246,24 +253,24 @@ def main() -> None:
             sort_by=args.sort,
             quiet=args.quiet,
             verbose=args.verbose,
+            root_prefix=args.root_prefix,
         )
     elif args.command == "collect":
-        show_startup_banner(duration=5.0)
+        if args.banner:
+            show_startup_banner(duration=5.0)
         run_collection(
             output_path=args.output,
-            output_format=args.format,
             hash_files=args.hash_files,
             mode=args.mode,
             modules=args.modules,
             follow_references=not args.no_follow_references,
-            copy_files=args.copy_files,
-            copy_references=args.copy_references,
             archive=args.archive,
             baseline_name=args.baseline_name,
             max_file_size=args.max_file_size,
             max_hash_size=args.max_hash_size,
             max_reference_depth=args.max_reference_depth,
             exclude_patterns=tuple(args.exclude_path) if args.exclude_path else (),
+            root_prefix=args.root_prefix,
         )
     else:
         parser.print_help()

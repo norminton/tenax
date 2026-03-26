@@ -1,46 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import time
-from time import perf_counter
-from typing import Any
 from collections import Counter
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable
 
-from tenax.checks.at_jobs import analyze_at_job_locations
-from tenax.checks.autostart_hooks import analyze_autostart_hook_locations
-from tenax.checks.capabilities import analyze_capabilities
-from tenax.checks.containers import analyze_container_locations
-from tenax.checks.cron import analyze_cron_locations
-from tenax.checks.environment_hooks import analyze_environment_hook_locations
-from tenax.checks.ld_preload import analyze_ld_preload_locations
-from tenax.checks.network_hooks import analyze_network_hook_locations
-from tenax.checks.pam import analyze_pam_locations
-from tenax.checks.rc_init import analyze_rc_init_locations
-from tenax.checks.shell_profiles import analyze_shell_profile_locations
-from tenax.checks.ssh import analyze_ssh_locations
-from tenax.checks.sudoers import analyze_sudoers_locations
-from tenax.checks.systemd import analyze_systemd_locations
-from tenax.checks.tmp_paths import analyze_tmp_paths
+from tenax.checks import ANALYZE_SOURCES, BUILTIN_MODULES
+from tenax.module_interface import apply_scoring_profile, determine_environment_label
 from tenax.reporter import output_results
+from tenax.scope import apply_module_scope, build_scan_scope, normalize_path_string
 
-ANALYZE_SOURCES = {
-    "cron": analyze_cron_locations,
-    "systemd": analyze_systemd_locations,
-    "shell_profiles": analyze_shell_profile_locations,
-    "ssh": analyze_ssh_locations,
-    "sudoers": analyze_sudoers_locations,
-    "rc_init": analyze_rc_init_locations,
-    "tmp_paths": analyze_tmp_paths,
-    "ld_preload": analyze_ld_preload_locations,
-    "autostart_hooks": analyze_autostart_hook_locations,
-    "network_hooks": analyze_network_hook_locations,
-    "pam": analyze_pam_locations,
-    "at_jobs": analyze_at_job_locations,
-    "containers": analyze_container_locations,
-    "environment_hooks": analyze_environment_hook_locations,
-    "capabilities": analyze_capabilities,
-}
+FINDING_SCHEMA_VERSION = "1.1"
 
 SOURCE_PRIORITY: dict[str, int] = {
     "systemd": 100,
@@ -127,7 +99,9 @@ SUSPICIOUS_KEYWORDS: dict[str, str] = {
 def _safe_invoke_module(
     source: str,
     func: Callable[[], list[dict[str, Any]]],
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    *,
+    module_metadata: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     start = time.perf_counter()
     try:
         results = func()
@@ -141,17 +115,21 @@ def _safe_invoke_module(
         return results, {
             "source": source,
             "status": "ok",
+            "ok": True,
             "duration_ms": duration_ms,
             "finding_count": len(results),
+            "module_metadata": module_metadata or {},
         }
     except Exception as exc:  # pragma: no cover
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         return [], {
             "source": source,
             "status": "error",
+            "ok": False,
             "duration_ms": duration_ms,
             "finding_count": 0,
             "error": f"{type(exc).__name__}: {exc}",
+            "module_metadata": module_metadata or {},
         }
 
 
@@ -187,10 +165,7 @@ def _normalize_path(path_value: Any) -> str | None:
     if not path_str:
         return None
 
-    try:
-        return str(Path(path_str).expanduser().resolve(strict=False))
-    except Exception:
-        return path_str
+    return normalize_path_string(path_str)
 
 
 def _ensure_list_of_strings(value: Any) -> list[str]:
@@ -215,23 +190,28 @@ def _ensure_list_of_strings(value: Any) -> list[str]:
 def _pick_primary_source(sources: list[str]) -> str:
     if not sources:
         return "unknown"
-    return max(
-        sorted(set(sources)),
-        key=lambda source: SOURCE_PRIORITY.get(source, 0),
-    )
+    return max(sorted(set(sources)), key=lambda source: SOURCE_PRIORITY.get(source, 0))
 
 
 def _pick_strongest_severity(severities: list[str]) -> str:
     if not severities:
         return "INFO"
-    return max(
-        sorted(set(severities)),
-        key=lambda sev: SEVERITY_RANK.get(sev, 0),
-    )
+    return max(sorted(set(severities)), key=lambda sev: SEVERITY_RANK.get(sev, 0))
 
 
 def _contains_any(text: str, values: tuple[str, ...]) -> bool:
     return any(value in text for value in values)
+
+
+def _derive_scope(tags: list[str]) -> str:
+    tag_set = set(tags)
+    if "user-scope" in tag_set and "system-scope" in tag_set:
+        return "mixed"
+    if "user-scope" in tag_set:
+        return "user"
+    if "system-scope" in tag_set:
+        return "system"
+    return "unknown"
 
 
 def _derive_tags(
@@ -253,7 +233,7 @@ def _derive_tags(
         tags.add("user-persistence")
 
     if path_value:
-        path_lower = path_value.lower()
+        path_lower = str(path_value).lower()
 
         if path_lower.startswith(TEMP_PATH_PREFIXES):
             tags.update({"temp-path", "suspicious-location"})
@@ -294,32 +274,101 @@ def _derive_tags(
     return sorted(tags)
 
 
-def _enrich_result(source: str, item: dict[str, Any]) -> dict[str, Any]:
+def _finding_identity(source: str, normalized_path: str | None, reason: str) -> str:
+    basis = f"{source}|{normalized_path or ''}|{reason}"
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+
+
+def _build_rule_id(source: str, tags: list[str]) -> str:
+    interesting_tags = [tag.upper().replace("-", "_") for tag in tags if tag not in {source, source.replace("_", "-")}]
+    suffix = interesting_tags[0] if interesting_tags else "GENERAL"
+    return f"TX-RULE-{source.upper()}-{suffix}"
+
+
+def _build_rule_name(source: str, tags: list[str]) -> str:
+    source_label = source.replace("_", " ")
+    if "world-writable" in tags:
+        return f"{source_label} writable persistence surface"
+    if "network-retrieval" in tags:
+        return f"{source_label} network retrieval behavior"
+    if "service-definition" in tags:
+        return f"{source_label} service definition anomaly"
+    return f"{source_label} suspicious persistence artifact"
+
+
+def _build_rationale(
+    *,
+    source: str,
+    primary_reason: str,
+    reasons: list[str],
+    preview: str | None,
+    tags: list[str],
+    normalized_path: str | None,
+    paths: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "summary": primary_reason,
+        "source": source,
+        "reasons": reasons,
+        "evidence_preview": preview,
+        "tags": tags,
+        "primary_path": normalized_path,
+        "paths": paths or ([normalized_path] if normalized_path else []),
+    }
+
+
+def _enrich_result(source: str, item: dict[str, Any], *, scope_context=None) -> dict[str, Any]:
     enriched = dict(item)
 
-    score = _coerce_score(enriched.get("score", 0))
-    severity = _normalize_severity(enriched.get("severity"), score)
-
-    path_value = enriched.get("path")
-    normalized_path = _normalize_path(path_value)
-
-    reason = str(enriched.get("reason", "") or "").strip()
-    preview = str(enriched.get("preview", "") or "").strip()
-    tags = _derive_tags(
-        source=source,
-        path_value=str(path_value) if path_value is not None else None,
-        reason=reason,
-        preview=preview,
+    host_path = _normalize_path(enriched.get("path"))
+    target_path = scope_context.target_path_from_host(host_path) if scope_context else host_path
+    normalized_path = _normalize_path(target_path)
+    module = BUILTIN_MODULES.get(source)
+    environment = determine_environment_label(
+        target_path,
+        root_prefix=scope_context.root_prefix if scope_context else None,
     )
+    score = apply_scoring_profile(_coerce_score(enriched.get("score", 0)), module, environment=environment)
+    severity = _normalize_severity(enriched.get("severity"), score)
+    reason = str(enriched.get("reason", "") or "").strip() or "No reason provided"
+    preview = str(enriched.get("preview", "") or "").strip()
+    tags = sorted(
+        set(_ensure_list_of_strings(enriched.get("tags")))
+        | set(_derive_tags(source=source, path_value=target_path, reason=reason, preview=preview))
+    )
+    scope = _derive_scope(tags)
 
+    if target_path:
+        enriched["path"] = target_path
+        enriched["target_path"] = target_path
+    if host_path and host_path != target_path:
+        enriched["host_path"] = host_path
     enriched["source"] = source
+    enriched["source_module"] = source
     enriched["score"] = score
     enriched["severity"] = severity
     enriched["normalized_path"] = normalized_path
-    enriched["reason"] = reason or "No reason provided"
+    enriched["reason"] = reason
     if preview:
         enriched["preview"] = preview
-    enriched["tags"] = sorted(set(_ensure_list_of_strings(enriched.get("tags"))) | set(tags))
+    enriched["tags"] = tags
+    enriched["scope"] = scope
+    enriched["module_contract"] = module.metadata.analyze_contract if module else "list[finding]"
+    enriched["heuristic_mode"] = module.metadata.heuristic_profile.default_mode if module else "strict"
+    enriched["scoring_profile"] = module.metadata.scoring_profile.name if module else "default"
+    enriched["rule_id"] = _build_rule_id(source, tags)
+    enriched["rule_name"] = _build_rule_name(source, tags)
+    enriched["schema_version"] = FINDING_SCHEMA_VERSION
+    enriched["finding_key"] = _finding_identity(source, normalized_path, reason)
+    enriched["rationale"] = _build_rationale(
+        source=source,
+        primary_reason=reason,
+        reasons=_ensure_list_of_strings(enriched.get("reasons")) or [reason],
+        preview=preview or None,
+        tags=tags,
+        normalized_path=normalized_path,
+        paths=_ensure_list_of_strings(enriched.get("path")),
+    )
     return enriched
 
 
@@ -329,12 +378,8 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in findings:
         normalized_path = item.get("normalized_path")
         source = str(item.get("source", "unknown"))
-
         item_reason = str(item.get("reason", "No reason provided"))
-        item_reasons = _ensure_list_of_strings(item.get("reasons"))
-        if not item_reasons:
-            item_reasons = [item_reason]
-
+        item_reasons = _ensure_list_of_strings(item.get("reasons")) or [item_reason]
         preview = str(item.get("preview", ""))
 
         if normalized_path:
@@ -352,38 +397,45 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "raw_scores": [_coerce_score(item.get("score", 0))],
                 "dedupe_count": 1,
                 "path_variants": [str(item.get("path"))] if item.get("path") else [],
+                "rule_ids": [str(item.get("rule_id", ""))] if item.get("rule_id") else [],
+                "rule_names": [str(item.get("rule_name", ""))] if item.get("rule_name") else [],
             }
             continue
 
         current = merged[key]
         current["dedupe_count"] += 1
-        current["sources"] = sorted(
-            set(_ensure_list_of_strings(current.get("sources"))) | {source}
-        )
-        current["reasons"] = sorted(
-            set(_ensure_list_of_strings(current.get("reasons")))
-            | set(item_reasons)
-        )
+        current["sources"] = sorted(set(_ensure_list_of_strings(current.get("sources"))) | {source})
+        current["reasons"] = sorted(set(_ensure_list_of_strings(current.get("reasons"))) | set(item_reasons))
         current["tags"] = sorted(
             set(_ensure_list_of_strings(current.get("tags")))
             | set(_ensure_list_of_strings(item.get("tags")))
         )
-        current["severity_candidates"] = _ensure_list_of_strings(
-            current.get("severity_candidates")
-        ) + [str(item.get("severity", "INFO"))]
-        current["raw_scores"] = list(current.get("raw_scores", [])) + [
-            _coerce_score(item.get("score", 0))
+        current["severity_candidates"] = _ensure_list_of_strings(current.get("severity_candidates")) + [
+            str(item.get("severity", "INFO"))
         ]
+        current["raw_scores"] = list(current.get("raw_scores", [])) + [_coerce_score(item.get("score", 0))]
+        current["rule_ids"] = sorted(
+            set(_ensure_list_of_strings(current.get("rule_ids")))
+            | set(_ensure_list_of_strings(item.get("rule_id")))
+        )
+        current["rule_names"] = sorted(
+            set(_ensure_list_of_strings(current.get("rule_names")))
+            | set(_ensure_list_of_strings(item.get("rule_name")))
+        )
 
         if item.get("path"):
             current["path_variants"] = sorted(
-                set(_ensure_list_of_strings(current.get("path_variants")))
-                | {str(item.get("path"))}
+                set(_ensure_list_of_strings(current.get("path_variants"))) | {str(item.get("path"))}
             )
 
         if _coerce_score(item.get("score", 0)) > _coerce_score(current.get("score", 0)):
             current["score"] = _coerce_score(item.get("score", 0))
             current["reason"] = item_reason
+            current["source"] = source
+            current["source_module"] = source
+            current["rule_id"] = item.get("rule_id")
+            current["rule_name"] = item.get("rule_name")
+            current["finding_key"] = item.get("finding_key")
             if item.get("preview"):
                 current["preview"] = item["preview"]
             if item.get("path"):
@@ -404,24 +456,55 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         primary_source = _pick_primary_source(sources)
         strongest_severity = _pick_strongest_severity(severities)
         max_score = max(raw_scores) if raw_scores else _coerce_score(item.get("score", 0))
+        normalized_path = item.get("normalized_path")
+        primary_reason = item.get("reason") or (reasons[0] if reasons else "No reason provided")
+        scope = _derive_scope(tags)
+        rule_id = item.get("rule_id") or _build_rule_id(primary_source, tags)
+        rule_name = item.get("rule_name") or _build_rule_name(primary_source, tags)
 
         consolidated_item = {
             **item,
+            "schema_version": FINDING_SCHEMA_VERSION,
             "source": primary_source,
+            "source_module": primary_source,
             "sources": sources,
-            "reason": item.get("reason") or (reasons[0] if reasons else "No reason provided"),
+            "reason": primary_reason,
             "reasons": reasons,
             "score": max_score,
             "severity": strongest_severity,
             "tags": tags,
+            "scope": scope,
+            "rule_id": rule_id,
+            "rule_name": rule_name,
             "score_breakdown": {
                 "max_score": max_score,
                 "raw_scores": raw_scores,
                 "reason_count": len(reasons),
                 "source_count": len(sources),
             },
-            "normalized_path": item.get("normalized_path"),
+            "normalized_path": normalized_path,
+            "paths": sorted(set(_ensure_list_of_strings(item.get("path_variants")) | set(_ensure_list_of_strings(item.get("path"))))),
+            "evidence": {
+                "preview": item.get("preview"),
+                "reasons": reasons,
+                "paths": sorted(set(_ensure_list_of_strings(item.get("path_variants")) | set(_ensure_list_of_strings(item.get("path"))))),
+            },
+            "dedupe": {
+                "merged_count": int(item.get("dedupe_count", 1)),
+                "sources": sources,
+                "rule_ids": sorted(set(_ensure_list_of_strings(item.get("rule_ids")) | set(_ensure_list_of_strings(rule_id)))),
+            },
+            "finding_key": item.get("finding_key") or _finding_identity(primary_source, normalized_path, primary_reason),
         }
+        consolidated_item["rationale"] = _build_rationale(
+            source=primary_source,
+            primary_reason=primary_reason,
+            reasons=reasons,
+            preview=item.get("preview"),
+            tags=tags,
+            normalized_path=normalized_path,
+            paths=consolidated_item["paths"],
+        )
         consolidated.append(consolidated_item)
 
     return consolidated
@@ -432,7 +515,7 @@ def _sort_key(item: dict[str, Any], sort_by: str = "score") -> tuple[Any, ...]:
     severity_rank = SEVERITY_RANK.get(str(item.get("severity", "INFO")), 0)
     source_priority = SOURCE_PRIORITY.get(str(item.get("source", "unknown")), 0)
     tags = set(_ensure_list_of_strings(item.get("tags")))
-    path_value = str(item.get("path", "") or "").lower()
+    path_value = str(item.get("normalized_path") or item.get("path", "")).lower()
     source = str(item.get("source", "unknown")).lower()
 
     temp_bias = 1 if "temp-path" in tags else 0
@@ -479,11 +562,81 @@ def _sort_key(item: dict[str, Any], sort_by: str = "score") -> tuple[Any, ...]:
 
 
 def _assign_finding_ids(findings: list[dict[str, Any]]) -> None:
-    counters: Counter[str] = Counter()
     for item in findings:
         source = str(item.get("source", "unknown")).upper().replace("-", "_")
-        counters[source] += 1
-        item["finding_id"] = f"TX-{source}-{counters[source]:04d}"
+        finding_key = str(item.get("finding_key", "000000000000")).upper()
+        item["finding_id"] = f"TX-{source}-{finding_key[:8]}"
+
+
+def _build_limitations(
+    selected_sources: list[str],
+    module_status: list[dict[str, Any]],
+    filters: dict[str, Any],
+    scope_context,
+) -> list[dict[str, Any]]:
+    limitations: list[dict[str, Any]] = []
+    errored_modules = [entry for entry in module_status if not entry.get("ok")]
+    if errored_modules:
+        limitations.append(
+            {
+                "type": "partial_coverage",
+                "code": "module_errors",
+                "message": "One or more analyzer modules failed; absence of findings does not imply full coverage.",
+                "modules": [entry["source"] for entry in errored_modules],
+            }
+        )
+
+    active_filters = {key: value for key, value in filters.items() if value not in (None, False, [], ())}
+    if active_filters:
+        limitations.append(
+            {
+                "type": "filtered_view",
+                "code": "results_filtered",
+                "message": "User-supplied filters reduced the visible finding set.",
+                "filters": active_filters,
+            }
+        )
+
+    limitations.append(
+        {
+            "type": "scope",
+            "code": "module_selection",
+            "message": "Only the selected analyzer modules were executed.",
+            "modules": selected_sources,
+        }
+    )
+    limitations.append(
+        {
+            "type": "scope",
+            "code": "target_root",
+            "message": (
+                f"Analysis targeted mounted root {scope_context.root_prefix}."
+                if scope_context.root_prefix
+                else "Analysis targeted the live host root."
+            ),
+            "root_prefix": str(scope_context.root_prefix) if scope_context.root_prefix else None,
+            "target_root": scope_context.root_label,
+        }
+    )
+    limitations.append(
+        {
+            "type": "scope",
+            "code": "user_enumeration",
+            "message": (
+                f"User-scoped modules enumerated {len(scope_context.target_users)} local user home paths."
+            ),
+            "users": [user.username for user in scope_context.target_users],
+            "homes": [user.home for user in scope_context.target_users],
+        }
+    )
+    limitations.append(
+        {
+            "type": "permissions",
+            "code": "access_boundaries",
+            "message": "Unreadable target paths may reduce observable findings; only accessible artifacts can be analyzed.",
+        }
+    )
+    return limitations
 
 
 def _build_summary(
@@ -496,9 +649,7 @@ def _build_summary(
 ) -> dict[str, Any]:
     elapsed_ms = round((perf_counter() - started_at) * 1000, 2)
 
-    severity_counter = Counter(
-        str(item.get("severity", "INFO")).upper() for item in filtered_findings
-    )
+    severity_counter = Counter(str(item.get("severity", "INFO")).upper() for item in filtered_findings)
     source_counter = Counter(str(item.get("source", "unknown")) for item in filtered_findings)
 
     tag_counter: Counter[str] = Counter()
@@ -511,12 +662,6 @@ def _build_summary(
         for item in filtered_findings
         if item.get("normalized_path") or item.get("path")
     }
-
-    temp_path_findings = 0
-    for item in filtered_findings:
-        path_value = str(item.get("path", "")).lower()
-        if any(token in path_value for token in ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/shm/")):
-            temp_path_findings += 1
 
     errored_modules = [entry for entry in module_status if not entry.get("ok")]
     module_success_count = len([entry for entry in module_status if entry.get("ok")])
@@ -532,7 +677,6 @@ def _build_summary(
         "displayed_finding_count": len(displayed_findings),
         "deduplicated_count": max(len(raw_findings) - len(consolidated_findings), 0),
         "unique_path_count": len(unique_paths),
-        "temp_path_finding_count": temp_path_findings,
         "analysis_duration_ms": elapsed_ms,
         "severity_counts": {
             sev: severity_counter.get(sev, 0)
@@ -543,51 +687,10 @@ def _build_summary(
     }
 
 
-def _print_module_summary(summary: dict[str, Any]) -> None:
-    print("\n=== TENAX ANALYZE SUMMARY ===")
-    print(f"Modules executed:      {summary['module_success_count']}/{summary['module_count']}")
-    print(f"Module failures:       {summary['module_error_count']}")
-    print(f"Raw findings:          {summary['raw_finding_count']}")
-    print(f"Consolidated findings: {summary['consolidated_finding_count']}")
-    print(f"Duplicates collapsed:  {summary['deduplicated_count']}")
-    print(f"Unique paths:          {summary['unique_path_count']}")
-    print(f"Temp path findings:    {summary['temp_path_finding_count']}")
-    print(f"Scan duration:         {summary['analysis_duration_ms']} ms")
-
-    severity_counts = summary.get("severity_counts", {})
-    if severity_counts:
-        ordered = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
-        rendered = " | ".join(
-            f"{severity}={severity_counts.get(severity, 0)}" for severity in ordered
-        )
-        print(f"Severity counts:       {rendered}")
-
-    source_counts = summary.get("source_counts", {})
-    if source_counts:
-        top_sources = list(source_counts.items())[:5]
-        rendered = ", ".join(f"{source}={count}" for source, count in top_sources)
-        print(f"Top sources:           {rendered}")
-
-    top_tags = summary.get("top_tags", {})
-    if top_tags:
-        rendered = ", ".join(f"{tag}={count}" for tag, count in list(top_tags.items())[:8])
-        print(f"Top tags:              {rendered}")
-
-    if summary.get("errored_modules"):
-        print("\n=== MODULE ERRORS ===")
-        for entry in summary["errored_modules"]:
-            print(f"- {entry['source']}: {entry.get('error', 'Unknown error')}")
-
-    print("")
-
-
 def _matches_source_filter(item: dict[str, Any], allowed_sources: set[str] | None) -> bool:
     if not allowed_sources:
         return True
-    item_sources = {
-        source.strip().lower()
-        for source in _ensure_list_of_strings(item.get("sources") or item.get("source"))
-    }
+    item_sources = {source.strip().lower() for source in _ensure_list_of_strings(item.get("sources") or item.get("source"))}
     return bool(item_sources & allowed_sources)
 
 
@@ -618,7 +721,7 @@ def _matches_writable_filter(item: dict[str, Any], only_writable: bool) -> bool:
 def _matches_existing_filter(item: dict[str, Any], only_existing: bool) -> bool:
     if not only_existing:
         return True
-    path_value = item.get("path")
+    path_value = item.get("host_path") or item.get("normalized_path") or item.get("path")
     if not path_value:
         return False
     try:
@@ -630,11 +733,11 @@ def _matches_existing_filter(item: dict[str, Any], only_existing: bool) -> bool:
 def _matches_scope_filter(item: dict[str, Any], scope: str | None) -> bool:
     if not scope:
         return True
-    tags = set(_ensure_list_of_strings(item.get("tags")))
+    item_scope = str(item.get("scope", "unknown")).lower()
     if scope == "user":
-        return "user-scope" in tags
+        return item_scope in {"user", "mixed"}
     if scope == "system":
-        return "system-scope" in tags
+        return item_scope in {"system", "mixed"}
     return True
 
 
@@ -681,62 +784,140 @@ def run_analysis(
     sort_by: str = "score",
     quiet: bool = False,
     verbose: bool = False,
-) -> None:
+    root_prefix: Path | None = None,
+) -> dict[str, Any]:
     started_at = perf_counter()
-
     selected_sources = sources or list(ANALYZE_SOURCES.keys())
-    findings: list[dict[str, Any]] = []
-    module_error_count = 0
+    scope_context = build_scan_scope(root_prefix)
 
-    for source in selected_sources:
-        analyzer = ANALYZE_SOURCES.get(source)
-        if analyzer is None:
-            continue
+    raw_findings: list[dict[str, Any]] = []
+    module_status: list[dict[str, Any]] = []
 
-        try:
-            results = analyzer()
+    with apply_module_scope(selected_sources, scope_context):
+        for source in selected_sources:
+            analyzer = ANALYZE_SOURCES.get(source)
+            if analyzer is None:
+                module_status.append(
+                    {
+                        "source": source,
+                        "status": "error",
+                        "ok": False,
+                        "duration_ms": 0.0,
+                        "finding_count": 0,
+                        "error": "unknown source",
+                        "module_metadata": {},
+                    }
+                )
+                continue
+
+            module = BUILTIN_MODULES.get(source)
+            module_metadata = (
+                {
+                    "display_name": module.metadata.display_name,
+                    "analyze_contract": module.metadata.analyze_contract,
+                    "heuristic_default": module.metadata.heuristic_profile.default_mode,
+                    "scoring_profile": module.metadata.scoring_profile.name,
+                }
+                if module
+                else {}
+            )
+            results, status = _safe_invoke_module(source, analyzer, module_metadata=module_metadata)
+            module_status.append(status)
+            if verbose and not status.get("ok"):
+                raise RuntimeError(f"{source} failed: {status.get('error', 'unknown error')}")
+
             for item in results:
-                enriched = dict(item)
-                enriched["source"] = source
-                findings.append(enriched)
-        except Exception:
-            module_error_count += 1
-            if verbose:
-                raise
+                if not isinstance(item, dict):
+                    continue
+                raw_findings.append(_enrich_result(source, item, scope_context=scope_context))
 
-    findings.sort(key=lambda item: item.get("score", 0), reverse=True)
+    consolidated_findings = _merge_findings(raw_findings)
+    filtered_findings = _apply_filters(
+        consolidated_findings,
+        severity=severity,
+        sources=sources,
+        path_contains=path_contains,
+        only_writable=only_writable,
+        only_existing=only_existing,
+        scope=scope,
+    )
 
-    if severity:
-        findings = [f for f in findings if str(f.get("severity", "")).upper() == severity.upper()]
+    reverse_sort = sort_by in {"score", "severity"}
+    sorted_findings = sorted(filtered_findings, key=lambda item: _sort_key(item, sort_by=sort_by), reverse=reverse_sort)
+    displayed_findings = sorted_findings[:top]
+    _assign_finding_ids(displayed_findings)
 
-    if path_contains:
-        needle = path_contains.lower()
-        findings = [f for f in findings if needle in str(f.get("path", "")).lower()]
+    summary = _build_summary(
+        raw_findings=raw_findings,
+        consolidated_findings=consolidated_findings,
+        filtered_findings=sorted_findings,
+        displayed_findings=displayed_findings,
+        module_status=module_status,
+        started_at=started_at,
+    )
 
-    displayed_results = findings[:top]
-
-    duration_ms = round((perf_counter() - started_at) * 1000, 2)
-
-    summary = {
-        "module_success_count": len(selected_sources) - module_error_count,
-        "module_count": len(selected_sources),
-        "module_error_count": module_error_count,
-        "raw_finding_count": len(findings),
-        "consolidated_finding_count": len(findings),
-        "deduplicated_count": 0,
-        "unique_path_count": len({str(f.get('path', '')) for f in findings}),
-        "analysis_duration_ms": duration_ms,
+    applied_filters = {
+        "severity": severity.lower() if severity else None,
+        "sources": sources or [],
+        "path_contains": path_contains,
+        "only_writable": only_writable,
+        "only_existing": only_existing,
+        "scope": scope,
+        "sort": sort_by,
+        "top": top,
     }
+    limitations = _build_limitations(selected_sources, module_status, applied_filters, scope_context)
 
     metadata = {
+        "schema_version": FINDING_SCHEMA_VERSION,
         "summary": summary,
+        "filters": applied_filters,
+        "selected_sources": selected_sources,
+        "module_status": module_status,
+        "module_catalog": {
+            name: {
+                "display_name": module.metadata.display_name,
+                "description": module.metadata.description,
+                "analyze_contract": module.metadata.analyze_contract,
+                "collect_contract": module.metadata.collect_contract,
+                "analysis_behavior": module.metadata.analysis_behavior,
+                "collection_behavior": module.metadata.collection_behavior,
+                "heuristic_profile": {
+                    "default_mode": module.metadata.heuristic_profile.default_mode,
+                    "supported_modes": list(module.metadata.heuristic_profile.supported_modes),
+                },
+                "scoring_profile": {
+                    "name": module.metadata.scoring_profile.name,
+                    "module_score_delta": module.metadata.scoring_profile.module_score_delta,
+                    "environment_score_deltas": module.metadata.scoring_profile.environment_score_deltas,
+                },
+                "scopes": list(module.metadata.scopes),
+                "tags": list(module.metadata.tags),
+            }
+            for name, module in BUILTIN_MODULES.items()
+            if name in selected_sources
+        },
+        "limitations": limitations,
         "quiet": quiet,
+        "scope": {
+            "root_prefix": str(scope_context.root_prefix) if scope_context.root_prefix else None,
+            "target_root": scope_context.root_label,
+            "all_users": [user.username for user in scope_context.target_users],
+            "user_homes": [user.home for user in scope_context.target_users],
+        },
     }
 
     output_results(
         mode="analyze",
-        results=displayed_results,
+        results=displayed_findings,
         output_format=output_format,
         output_path=output_path,
         metadata=metadata,
     )
+
+    return {
+        "results": displayed_findings,
+        "summary": summary,
+        "metadata": metadata,
+        "all_results": sorted_findings,
+    }

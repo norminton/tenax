@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tenax"
+version = "0.1.0"
+description = "Linux persistence triage and evidence collection for incident response."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "norminton" }
+]
+keywords = ["dfir", "incident-response", "linux", "forensics", "persistence"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+  "Topic :: System :: Systems Administration",
+]
+
+[project.urls]
+Documentation = "https://github.com/norminton/tenax/tree/main/docs"
+Repository = "https://github.com/norminton/tenax"
+Issues = "https://github.com/norminton/tenax/issues"
+
+[project.scripts]
+tenax = "tenax.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+license-files = ["LICENSE"]
+
+[tool.setuptools.packages.find]
+include = ["tenax*"]

