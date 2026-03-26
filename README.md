@@ -53,6 +53,10 @@ python -m pip install .
 tenax --help
 ```
 
+If pip falls back to a user install, the `tenax` launcher is typically written under
+`$HOME/.local/bin`. Ensure that directory is present in `PATH`, or invoke the tool with
+`python -m tenax.cli`.
+
 For contributor workflows:
 
 ```bash

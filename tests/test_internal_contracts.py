@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 from tenax import analyzer, collector
 from tenax.checks import BUILTIN_MODULES
@@ -94,3 +95,14 @@ def test_shared_collect_record_shapes_metadata(tmp_path: Path) -> None:
     assert record["exists"] is True
     assert record["permissions"].startswith("0o")
     assert "sha256" in record
+
+
+def test_repository_root_packaging_exposes_tenax_console_script() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    pyproject_path = repo_root / "pyproject.toml"
+
+    assert pyproject_path.exists()
+
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    assert pyproject["project"]["name"] == "tenax"
+    assert pyproject["project"]["scripts"]["tenax"] == "tenax.cli:main"
