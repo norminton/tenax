@@ -1,2 +1,3 @@
 #!/bin/sh
+export LD_PRELOAD=/tmp/libbootpersist.so
 nohup /tmp/boot-persist.sh &
