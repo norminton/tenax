@@ -13,7 +13,36 @@ from .conftest import assert_basic_module_finding, fixture_path
 def _copy_fixture(source: Path, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    destination.chmod(0o644)
     return destination
+
+
+def _set_root_owned_stat(monkeypatch: pytest.MonkeyPatch, module, target: Path) -> None:
+    real_stat = target.stat()
+    original_private = getattr(module, "_safe_stat", None)
+    original_public = getattr(module, "safe_stat", None)
+
+    def fake_stat(path):
+        if Path(path) == target:
+            return SimpleNamespace(
+                st_mode=real_stat.st_mode,
+                st_uid=0,
+                st_gid=0,
+                st_size=real_stat.st_size,
+                st_ino=real_stat.st_ino,
+                st_mtime=real_stat.st_mtime,
+                st_ctime=real_stat.st_ctime,
+            )
+        if original_private is not None:
+            return original_private(path)
+        if original_public is not None:
+            return original_public(path)
+        return Path(path).stat()
+
+    if hasattr(module, "_safe_stat"):
+        monkeypatch.setattr(module, "_safe_stat", fake_stat)
+    if hasattr(module, "safe_stat"):
+        monkeypatch.setattr(module, "safe_stat", fake_stat)
 
 
 @pytest.mark.parametrize(
@@ -44,6 +73,7 @@ def test_modules_detect_realistic_suspicious_fixture(
     else:
         target = _copy_fixture(fixture, tmp_path / file_name)
         monkeypatch.setattr(module, path_attr, [target])
+        _set_root_owned_stat(monkeypatch, module, target)
 
     findings = getattr(module, [name for name in dir(module) if name.startswith("analyze_")][0])()
 
@@ -79,6 +109,7 @@ def test_modules_suppress_benign_fixture(
     else:
         target = _copy_fixture(fixture, tmp_path / file_name)
         monkeypatch.setattr(module, path_attr, [target])
+        _set_root_owned_stat(monkeypatch, module, target)
 
     findings = getattr(module, [name for name in dir(module) if name.startswith("analyze_")][0])()
 
@@ -113,6 +144,7 @@ def test_modules_collect_fixture_artifacts(
     else:
         target = _copy_fixture(fixture, tmp_path / file_name)
         monkeypatch.setattr(module, path_attr, [target])
+        _set_root_owned_stat(monkeypatch, module, target)
 
     artifacts = getattr(module, [name for name in dir(module) if name.startswith("collect_")][0])(hash_files=True)
 

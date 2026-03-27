@@ -599,6 +599,14 @@ def _build_limitations(
 ) -> list[dict[str, Any]]:
     limitations: list[dict[str, Any]] = []
     errored_modules = [entry for entry in module_status if not entry.get("ok")]
+    for entry in module_status:
+        for limitation in entry.get("limitations", []):
+            limitations.append(
+                {
+                    **limitation,
+                    "module": entry["source"],
+                }
+            )
     if errored_modules:
         limitations.append(
             {
@@ -984,11 +992,3 @@ def _print_verbose_status(status: dict[str, Any]) -> None:
     print(
         f"[verbose] analyze module={source} status=error duration_ms={duration_ms} findings={finding_count} error={error_text}"
     )
-    for entry in module_status:
-        for limitation in entry.get("limitations", []):
-            limitations.append(
-                {
-                    **limitation,
-                    "module": entry["source"],
-                }
-            )

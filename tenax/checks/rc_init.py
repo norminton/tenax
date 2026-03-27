@@ -848,6 +848,7 @@ def _record_hit(
             "reason": reason,
             "score": score,
             "preview": preview,
+            "category": category,
         }
 
 

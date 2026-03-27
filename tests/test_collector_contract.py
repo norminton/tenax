@@ -12,7 +12,7 @@ from .conftest import assert_manifest_artifact_shape, assert_reference_shape
 
 
 def _latest_collection_dir(base: Path) -> Path:
-    return sorted(base.glob("collect_*"))[-1]
+    return sorted(path for path in base.glob("collect_*") if path.is_dir())[-1]
 
 
 def test_run_collection_requires_explicit_supported_mode(tmp_path: Path) -> None:

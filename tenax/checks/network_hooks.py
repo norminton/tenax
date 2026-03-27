@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import hashlib
-import pwd
 import re
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import build_collect_record, owner_from_uid, safe_lstat, safe_stat, safe_walk
 from tenax.utils import is_file_safe, path_exists
 
 DEFAULT_PATH = "/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin"
@@ -210,7 +209,7 @@ def analyze_network_hook_locations() -> list[dict[str, Any]]:
             continue
 
         if base.is_dir():
-            for child in _safe_walk(base):
+            for child in safe_walk(base):
                 child_str = str(child)
                 if child_str in seen_paths:
                     continue
@@ -253,15 +252,15 @@ def collect_network_hook_locations(hash_files: bool = False) -> list[dict[str, A
 
                 if not is_file_safe(child):
                     continue
-                artifacts.append(_build_collect_record(child, hash_files=hash_files))
+                    artifacts.append(build_collect_record(child, hash_files=hash_files))
         else:
             base_str = str(base)
             if base_str in seen_paths:
                 continue
             seen_paths.add(base_str)
 
-            if is_file_safe(base):
-                artifacts.append(_build_collect_record(base, hash_files=hash_files))
+                if is_file_safe(base):
+                    artifacts.append(build_collect_record(base, hash_files=hash_files))
 
     return artifacts
 
@@ -310,13 +309,13 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
             category="hidden-target",
         )
 
-    stat_info = _safe_lstat(path)
+    stat_info = safe_lstat(path)
     if stat_info and stat_info.st_uid != 0:
         _record_hit(
             hits,
             reason="Network hook symlink is owned by a non-root account",
             score=75,
-            preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
+            preview=f"owner={owner_from_uid(stat_info.st_uid)}",
             category="ownership",
         )
 
@@ -328,7 +327,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     path_str = str(path)
     path_lower = path_str.lower()
 
-    stat_info = _safe_stat(path)
+    stat_info = safe_stat(path)
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
@@ -740,34 +739,6 @@ def _record_hit(hits, reason, score, preview, category):
             "preview": preview,
             "category": category,
         }
-
-
-def _safe_walk(base: Path):
-    try:
-        return list(base.rglob("*"))
-    except Exception:
-        return []
-
-
-def _safe_stat(path: Path):
-    try:
-        return path.stat()
-    except Exception:
-        return None
-
-
-def _safe_lstat(path: Path):
-    try:
-        return path.lstat()
-    except Exception:
-        return None
-
-
-def _owner_from_uid(uid: int):
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except Exception:
-        return str(uid)
 
 
 def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:

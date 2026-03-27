@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import Any
 
 from tenax.output_paths import resolve_output_file
+from tenax.output_paths import resolve_runtime_output_dir
 
 SEVERITY_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 
@@ -23,11 +24,19 @@ def output_results(
     terminal_results = display_results if display_results is not None else results
 
     extension = "json" if output_format == "json" else "txt"
-    auto_output_file, explicit_output_file = resolve_output_file(
-        mode=mode,
-        extension=extension,
-        explicit_path=output_path,
-    )
+    if output_path:
+        auto_output_file, explicit_output_file = resolve_output_file(
+            mode=mode,
+            extension=extension,
+            explicit_path=output_path,
+        )
+    else:
+        timestamped_file, explicit_output_file = resolve_output_file(
+            mode=mode,
+            extension=extension,
+            explicit_path=None,
+        )
+        auto_output_file = _get_tenax_output_dir() / timestamped_file.name
 
     full_render = _render(mode, saved_results, output_format, metadata)
     auto_output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -179,3 +188,7 @@ def _ensure_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _get_tenax_output_dir():
+    return resolve_runtime_output_dir()
