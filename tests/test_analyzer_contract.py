@@ -91,10 +91,19 @@ def test_run_analysis_applies_repaired_filters_and_schema(
 
     captured: dict[str, object] = {}
 
-    def fake_output_results(*, mode: str, results: list[dict[str, object]], output_format: str, output_path, metadata):
+    def fake_output_results(
+        *,
+        mode: str,
+        results: list[dict[str, object]],
+        output_format: str,
+        output_path,
+        metadata,
+        display_results=None,
+    ):
         captured["mode"] = mode
         captured["results"] = results
         captured["metadata"] = metadata
+        captured["display_results"] = display_results
 
     monkeypatch.setattr(analyzer, "output_results", fake_output_results)
 
@@ -113,6 +122,8 @@ def test_run_analysis_applies_repaired_filters_and_schema(
     assert captured["mode"] == "analyze"
     assert payload["summary"]["filtered_finding_count"] == 1
     assert payload["summary"]["deduplicated_count"] == 1
+    assert payload["summary"]["saved_finding_count"] == 1
+    assert payload["summary"]["displayed_finding_count"] == 1
 
     finding = payload["results"][0]
     assert_analyze_finding_shape(finding)
@@ -125,6 +136,8 @@ def test_run_analysis_applies_repaired_filters_and_schema(
     assert finding["dedupe"]["merged_count"] == 2
     assert "writable" in finding["tags"]
     assert any(item["code"] == "results_filtered" for item in payload["metadata"]["limitations"])
+    assert captured["results"] == payload["all_results"]
+    assert captured["display_results"] == payload["results"]
     assert payload["metadata"]["filters"]["severity"] == "medium"
     assert payload["metadata"]["filters"]["only_writable"] is True
     assert payload["metadata"]["filters"]["only_existing"] is True
@@ -199,6 +212,81 @@ def test_run_analysis_reports_coverage_and_module_failures(
     assert "RuntimeError" in cron_status["error"]
     assert missing_status["ok"] is False
     assert missing_status["error"] == "unknown source"
+
+
+def test_run_analysis_saves_full_filtered_results_while_terminal_display_honors_top(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        analyzer,
+        "ANALYZE_SOURCES",
+        {
+            "systemd": lambda: [
+                _finding("/tmp/one.service", score=100, severity="CRITICAL", reason="one"),
+                _finding("/tmp/two.service", score=90, severity="HIGH", reason="two"),
+                _finding("/tmp/three.service", score=80, severity="HIGH", reason="three"),
+            ],
+        },
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_output_results(
+        *,
+        mode: str,
+        results: list[dict[str, object]],
+        output_format: str,
+        output_path,
+        metadata,
+        display_results=None,
+    ):
+        captured["mode"] = mode
+        captured["results"] = results
+        captured["display_results"] = display_results
+        captured["metadata"] = metadata
+
+    monkeypatch.setattr(analyzer, "output_results", fake_output_results)
+
+    payload = analyzer.run_analysis(
+        output_format="json",
+        sources=["systemd"],
+        top=2,
+    )
+
+    assert payload["summary"]["filtered_finding_count"] == 3
+    assert payload["summary"]["saved_finding_count"] == 3
+    assert payload["summary"]["displayed_finding_count"] == 2
+    assert payload["summary"]["display_truncated"] is True
+    assert len(payload["results"]) == 2
+    assert len(payload["all_results"]) == 3
+    assert captured["results"] == payload["all_results"]
+    assert captured["display_results"] == payload["results"]
+    assert any(item["code"] == "terminal_truncation" for item in payload["metadata"]["limitations"])
+    assert not any(item["code"] == "results_filtered" for item in payload["metadata"]["limitations"])
+
+
+def test_run_analysis_does_not_report_user_filters_for_default_top_and_sort_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        analyzer,
+        "ANALYZE_SOURCES",
+        {
+            "systemd": lambda: [
+                _finding("/tmp/one.service", score=100, severity="CRITICAL", reason="one"),
+                _finding("/tmp/two.service", score=90, severity="HIGH", reason="two"),
+            ],
+        },
+    )
+    monkeypatch.setattr(analyzer, "output_results", lambda **kwargs: None)
+
+    payload = analyzer.run_analysis(
+        output_format="json",
+        sources=["systemd"],
+    )
+
+    limitation_codes = {item["code"] for item in payload["metadata"]["limitations"]}
+    assert "results_filtered" not in limitation_codes
 
 
 def test_cli_main_dispatches_repaired_analyze_contract_flags(

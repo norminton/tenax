@@ -8,7 +8,7 @@ It is designed to help responders inspect known persistence surfaces, collect su
 
 Tenax currently provides two CLI workflows:
 
-- `tenax analyze` runs the built-in analyzer modules, enriches and deduplicates findings, applies user-selected filters, and writes text or JSON output.
+- `tenax analyze` runs the built-in analyzer modules, enriches and deduplicates findings, applies user-selected filters, prints a responder-friendly terminal slice, and always saves the full filtered result set under `outputs/`.
 - `tenax collect` gathers artifacts from the built-in collection modules, follows bounded path references, and writes an investigation bundle under `output/`.
 
 Built-in module families currently registered in the codebase:
@@ -108,7 +108,8 @@ This sample reflects the current text renderer in `tenax/reporter.py`.
 
 ```text
 === TENAX ANALYZE RESULTS ===
-Findings shown: 2 of 2
+Findings shown in terminal: 2 of 2
+Full findings saved: 2
 Modules: 2/2 succeeded
 Limitations:
 - Only the selected analyzer modules were executed.
@@ -196,6 +197,7 @@ Additional examples are documented in [docs/usage-examples.md](docs/usage-exampl
 |   |-- analyst-guide.md
 |   `-- modules/
 |-- output/
+|-- outputs/
 |-- tenax/
 |   |-- analyzer.py
 |   |-- cli.py

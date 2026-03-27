@@ -589,6 +589,8 @@ def _build_limitations(
     module_status: list[dict[str, Any]],
     filters: dict[str, Any],
     scope_context,
+    *,
+    display_truncated: bool,
 ) -> list[dict[str, Any]]:
     limitations: list[dict[str, Any]] = []
     errored_modules = [entry for entry in module_status if not entry.get("ok")]
@@ -602,14 +604,28 @@ def _build_limitations(
             }
         )
 
-    active_filters = {key: value for key, value in filters.items() if value not in (None, False, [], ())}
+    filter_keys = {"severity", "sources", "path_contains", "only_writable", "only_existing", "scope"}
+    active_filters = {
+        key: value
+        for key, value in filters.items()
+        if key in filter_keys and value not in (None, False, [], ())
+    }
     if active_filters:
         limitations.append(
             {
                 "type": "filtered_view",
                 "code": "results_filtered",
-                "message": "User-supplied filters reduced the visible finding set.",
+                "message": "User-supplied filters reduced the final finding set.",
                 "filters": active_filters,
+            }
+        )
+    if display_truncated:
+        limitations.append(
+            {
+                "type": "display",
+                "code": "terminal_truncation",
+                "message": "Terminal display was truncated by the configured top-N limit; the saved analysis artifact contains the full filtered result set.",
+                "display_limit": int(filters.get("top", 0) or 0),
             }
         )
 
@@ -691,6 +707,8 @@ def _build_summary(
         "consolidated_finding_count": len(consolidated_findings),
         "filtered_finding_count": len(filtered_findings),
         "displayed_finding_count": len(displayed_findings),
+        "saved_finding_count": len(filtered_findings),
+        "display_truncated": len(displayed_findings) < len(filtered_findings),
         "deduplicated_count": max(len(raw_findings) - len(consolidated_findings), 0),
         "unique_path_count": len(unique_paths),
         "analysis_duration_ms": elapsed_ms,
@@ -803,6 +821,7 @@ def run_analysis(
     root_prefix: Path | None = None,
 ) -> dict[str, Any]:
     started_at = perf_counter()
+    top = max(int(top), 0)
     selected_sources = sources or list(ANALYZE_SOURCES.keys())
     scope_context = build_scan_scope(root_prefix)
 
@@ -882,7 +901,13 @@ def run_analysis(
         "sort": sort_by,
         "top": top,
     }
-    limitations = _build_limitations(selected_sources, module_status, applied_filters, scope_context)
+    limitations = _build_limitations(
+        selected_sources,
+        module_status,
+        applied_filters,
+        scope_context,
+        display_truncated=summary["display_truncated"],
+    )
 
     metadata = {
         "schema_version": FINDING_SCHEMA_VERSION,
@@ -925,10 +950,11 @@ def run_analysis(
 
     output_results(
         mode="analyze",
-        results=displayed_findings,
+        results=sorted_findings,
         output_format=output_format,
         output_path=output_path,
         metadata=metadata,
+        display_results=displayed_findings,
     )
 
     return {

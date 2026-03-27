@@ -15,8 +15,12 @@ def output_results(
     output_format: str = "text",
     output_path=None,
     metadata: dict[str, Any] | None = None,
+    *,
+    display_results: list[dict[str, Any]] | None = None,
 ) -> None:
     metadata = metadata or {}
+    saved_results = results
+    terminal_results = display_results if display_results is not None else results
 
     output_dir = _get_tenax_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -28,7 +32,7 @@ def output_results(
         output_path = Path(output_path)
         explicit_output_file = output_path / f"{mode}_{timestamp}.{extension}" if output_path.is_dir() else output_path
 
-    full_render = _render(mode, results, output_format, metadata)
+    full_render = _render(mode, saved_results, output_format, metadata)
     auto_output_file.parent.mkdir(parents=True, exist_ok=True)
     auto_output_file.write_text(full_render, encoding="utf-8")
 
@@ -36,11 +40,12 @@ def output_results(
         explicit_output_file.parent.mkdir(parents=True, exist_ok=True)
         explicit_output_file.write_text(full_render, encoding="utf-8")
 
-    terminal_results = results[:5]
     terminal_metadata = dict(metadata)
     summary = dict(terminal_metadata.get("summary", {}))
     if "displayed_finding_count" in summary:
         summary["displayed_finding_count"] = len(terminal_results)
+    if "saved_finding_count" in summary:
+        summary["saved_finding_count"] = len(saved_results)
     terminal_metadata["summary"] = summary
 
     terminal_render = _render(mode, terminal_results, output_format, terminal_metadata)
@@ -95,13 +100,17 @@ def _render_analyze_text(results: list[dict[str, Any]], metadata: dict[str, Any]
 
     if summary and not quiet:
         total = summary.get("filtered_finding_count", len(results))
-        shown = len(results)
-        lines.append(f"Findings shown: {shown} of {total}")
+        shown = summary.get("displayed_finding_count", len(results))
+        saved = summary.get("saved_finding_count", total)
+        lines.append(f"Findings shown in terminal: {shown} of {total}")
+        lines.append(f"Full findings saved: {saved}")
         lines.append(
             f"Modules: {summary.get('module_success_count', 0)}/{summary.get('module_count', 0)} succeeded"
         )
         if summary.get("module_error_count"):
             lines.append(f"Module failures: {summary['module_error_count']}")
+        if summary.get("display_truncated"):
+            lines.append("Display truncated for terminal readability; saved artifact contains the full filtered result set.")
 
     limitations = metadata.get("limitations") or []
     if limitations and not quiet:
@@ -178,6 +187,6 @@ def _ensure_list(value: Any) -> list[Any]:
 def _get_tenax_output_dir() -> Path:
     reporter_file = Path(__file__).resolve()
     repo_root = reporter_file.parent.parent
-    output_dir = repo_root / "output"
+    output_dir = repo_root / "outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
