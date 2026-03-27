@@ -244,7 +244,7 @@ def collect_network_hook_locations(hash_files: bool = False) -> list[dict[str, A
             continue
 
         if base.is_dir():
-            for child in _safe_walk(base):
+            for child in safe_walk(base):
                 child_str = str(child)
                 if child_str in seen_paths:
                     continue
@@ -252,15 +252,15 @@ def collect_network_hook_locations(hash_files: bool = False) -> list[dict[str, A
 
                 if not is_file_safe(child):
                     continue
-                    artifacts.append(build_collect_record(child, hash_files=hash_files))
+                artifacts.append(build_collect_record(child, hash_files=hash_files))
         else:
             base_str = str(base)
             if base_str in seen_paths:
                 continue
             seen_paths.add(base_str)
 
-                if is_file_safe(base):
-                    artifacts.append(build_collect_record(base, hash_files=hash_files))
+            if is_file_safe(base):
+                artifacts.append(build_collect_record(base, hash_files=hash_files))
 
     return artifacts
 
@@ -709,7 +709,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
             hits,
             reason="Network hook owned by non-root AND contains suspicious behavior",
             score=40,
-            preview=f"owner={_owner_from_uid(hits['_ownership_flag']['uid'])}",
+            preview=f"owner={owner_from_uid(hits['_ownership_flag']['uid'])}",
             category="ownership",
         )
         del hits["_ownership_flag"]
