@@ -604,7 +604,7 @@ def _build_limitations(
             }
         )
 
-    filter_keys = {"severity", "sources", "path_contains", "only_writable", "only_existing", "scope"}
+    filter_keys = {"severity", "path_contains", "only_writable", "only_existing", "scope"}
     active_filters = {
         key: value
         for key, value in filters.items()
