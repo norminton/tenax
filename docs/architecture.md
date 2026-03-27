@@ -57,7 +57,7 @@ Current steps:
 4. Enrich each raw finding with normalized path data, rule metadata, tags, scope, rationale, and stable finding IDs.
 5. Merge duplicate findings by normalized path and reason context.
 6. Apply user-requested filters such as severity, source, path substring, writability, existence, and scope.
-7. Sort and truncate the visible results.
+7. Sort the full filtered result set, assign stable finding IDs across that full set, and then truncate only the visible terminal slice.
 8. Build summary and limitation metadata.
 9. Hand the rendered output to `tenax.reporter.output_results(...)`.
 
@@ -65,7 +65,7 @@ Current steps:
 
 The reporter writes:
 
-- an automatic output file under `output/`
+- an automatic output file under the project-local `output/` directory resolved from the current repository root
 - an optional explicit output file if `--output` is provided
 - a terminal rendering of the first few results
 

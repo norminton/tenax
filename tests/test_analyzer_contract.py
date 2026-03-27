@@ -259,6 +259,7 @@ def test_run_analysis_saves_full_filtered_results_while_terminal_display_honors_
     assert payload["summary"]["display_truncated"] is True
     assert len(payload["results"]) == 2
     assert len(payload["all_results"]) == 3
+    assert all(item["finding_id"].startswith("TX-SYSTEMD-") for item in payload["all_results"])
     assert captured["results"] == payload["all_results"]
     assert captured["display_results"] == payload["results"]
     assert any(item["code"] == "terminal_truncation" for item in payload["metadata"]["limitations"])

@@ -6,6 +6,7 @@ on:
 
 jobs:
   test:
+    name: Linux Test Suite
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,5 +23,5 @@ jobs:
           python -m pip install .
           python -m pip install pytest
 
-      - name: Run tests
+      - name: Run Linux tests
         run: python -m pytest

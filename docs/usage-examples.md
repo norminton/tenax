@@ -31,7 +31,8 @@ Sample text output:
 
 ```text
 === TENAX ANALYZE RESULTS ===
-Findings shown: 3 of 3
+Findings shown in terminal: 3 of 3
+Full findings saved: 3
 Modules: 3/3 succeeded
 Limitations:
 - Only the selected analyzer modules were executed.

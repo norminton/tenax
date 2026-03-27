@@ -2,7 +2,7 @@
 
 ## Development Setup
 
-Tenax targets Linux environments. Development and test runs are most reliable on Linux because the collector and several modules depend on POSIX account and filesystem behavior.
+Tenax targets Linux environments. Development and test runs are authoritative on Linux or WSL Ubuntu because the collector and several modules depend on POSIX account and filesystem behavior. Windows-native test execution is not a supported parity target.
 
 ```bash
 python -m venv .venv
@@ -27,6 +27,8 @@ Run the full suite:
 ```bash
 python -m pytest
 ```
+
+Run tests from Linux or WSL Ubuntu, not from Windows-native PowerShell or `cmd.exe`, when validating behavior for review or release decisions.
 
 Run a focused test file while changing a module:
 
@@ -71,7 +73,7 @@ When changing a module:
 
 Before opening a change:
 
-- run `python -m pytest`
+- run `python -m pytest` on Linux or WSL Ubuntu
 - make sure `python -m pip install .` still succeeds
 - review `README.md` and docs for drift if you changed CLI behavior or output
 - keep unrelated edits out of the patch

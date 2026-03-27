@@ -6,15 +6,16 @@ from pathlib import Path
 from tenax import reporter
 
 
-def test_output_results_writes_full_analyze_artifact_to_outputs_and_keeps_terminal_slice(
+def test_output_results_writes_full_analyze_artifact_to_project_output_and_keeps_terminal_slice(
     monkeypatch,
     tmp_path: Path,
     capsys,
 ) -> None:
-    fake_reporter = tmp_path / "repo" / "tenax" / "reporter.py"
-    fake_reporter.parent.mkdir(parents=True)
-    fake_reporter.write_text("# reporter stub\n", encoding="utf-8")
-    monkeypatch.setattr(reporter, "__file__", str(fake_reporter))
+    repo_root = tmp_path / "repo"
+    (repo_root / "tenax").mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='tenax'\n", encoding="utf-8")
+    (repo_root / "README.md").write_text("# Tenax\n", encoding="utf-8")
+    monkeypatch.chdir(repo_root)
 
     full_results = [
         {"finding_id": "TX-1", "severity": "CRITICAL", "source": "systemd", "path": "/tmp/one", "score": 100},
@@ -43,7 +44,7 @@ def test_output_results_writes_full_analyze_artifact_to_outputs_and_keeps_termin
         display_results=display_results,
     )
 
-    saved_files = sorted((tmp_path / "repo" / "outputs").glob("analyze_*.json"))
+    saved_files = sorted((repo_root / "output").glob("analyze_*.json"))
     assert len(saved_files) == 1
 
     saved_payload = json.loads(saved_files[0].read_text(encoding="utf-8"))

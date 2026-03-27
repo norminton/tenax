@@ -8,7 +8,7 @@ It is designed to help responders inspect known persistence surfaces, collect su
 
 Tenax currently provides two CLI workflows:
 
-- `tenax analyze` runs the built-in analyzer modules, enriches and deduplicates findings, applies user-selected filters, prints a responder-friendly terminal slice, and always saves the full filtered result set under `outputs/`.
+- `tenax analyze` runs the built-in analyzer modules, enriches and deduplicates findings, applies user-selected filters, prints a responder-friendly terminal slice, and always saves the full filtered result set under `output/`.
 - `tenax collect` gathers artifacts from the built-in collection modules, follows bounded path references, and writes an investigation bundle under `output/`.
 
 Built-in module families currently registered in the codebase:
@@ -32,6 +32,7 @@ Built-in module families currently registered in the codebase:
 ## Scope And Limitations
 
 Tenax is Linux-only. The codebase depends on Linux filesystem semantics and POSIX account metadata modules such as `pwd` and `grp`.
+Linux or WSL Ubuntu is the authoritative runtime and test environment. Windows-native execution is not a supported parity target for Tenax analysis or test validation.
 
 Tenax does not claim complete persistence coverage. It inspects the built-in surfaces above and reports limitations alongside results, including:
 
@@ -66,6 +67,8 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 python -m pip install pytest
 ```
+
+Run those commands from Linux or WSL Ubuntu. Do not treat Windows-native `cmd.exe` or PowerShell test runs as authoritative for this repository.
 
 ## CLI Usage
 
@@ -197,7 +200,6 @@ Additional examples are documented in [docs/usage-examples.md](docs/usage-exampl
 |   |-- analyst-guide.md
 |   `-- modules/
 |-- output/
-|-- outputs/
 |-- tenax/
 |   |-- analyzer.py
 |   |-- cli.py
@@ -221,7 +223,7 @@ Run the current test suite with:
 python -m pytest
 ```
 
-The GitHub Actions workflow runs installation plus `pytest` on Ubuntu.
+Run the suite on Linux or WSL Ubuntu. The GitHub Actions workflow is Ubuntu-based and is the authoritative CI environment for this project.
 
 ## Documentation
 

@@ -879,8 +879,8 @@ def run_analysis(
 
     reverse_sort = sort_by in {"score", "severity"}
     sorted_findings = sorted(filtered_findings, key=lambda item: _sort_key(item, sort_by=sort_by), reverse=reverse_sort)
+    _assign_finding_ids(sorted_findings)
     displayed_findings = sorted_findings[:top]
-    _assign_finding_ids(displayed_findings)
 
     summary = _build_summary(
         raw_findings=raw_findings,

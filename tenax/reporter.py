@@ -185,8 +185,28 @@ def _ensure_list(value: Any) -> list[Any]:
 
 
 def _get_tenax_output_dir() -> Path:
-    reporter_file = Path(__file__).resolve()
-    repo_root = reporter_file.parent.parent
-    output_dir = repo_root / "outputs"
+    repo_root = _find_project_root()
+    output_dir = repo_root / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
+
+
+def _find_project_root() -> Path:
+    for start in (Path.cwd().resolve(), Path(__file__).resolve()):
+        candidate = _find_repo_root_from(start)
+        if candidate is not None:
+            return candidate
+
+    return Path.cwd().resolve()
+
+
+def _find_repo_root_from(start: Path) -> Path | None:
+    markers = ("pyproject.toml", "README.md")
+
+    for candidate in (start, *start.parents):
+        if "site-packages" in candidate.parts or "dist-packages" in candidate.parts:
+            continue
+        if all((candidate / marker).exists() for marker in markers) and (candidate / "tenax").is_dir():
+            return candidate
+
+    return None
