@@ -112,6 +112,7 @@ def _safe_invoke_module(
                 f"Module '{source}' returned {type(results).__name__}; expected list[dict]."
             )
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        module_limitations = getattr(func, "_tenax_limitations", [])
         return results, {
             "source": source,
             "status": "ok",
@@ -119,6 +120,7 @@ def _safe_invoke_module(
             "duration_ms": duration_ms,
             "finding_count": len(results),
             "module_metadata": module_metadata or {},
+            "limitations": module_limitations,
         }
     except Exception as exc:  # pragma: no cover
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
@@ -130,6 +132,7 @@ def _safe_invoke_module(
             "finding_count": 0,
             "error": f"{type(exc).__name__}: {exc}",
             "module_metadata": module_metadata or {},
+            "limitations": getattr(func, "_tenax_limitations", []),
         }
 
 
@@ -390,10 +393,12 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item_reasons = _ensure_list_of_strings(item.get("reasons")) or [item_reason]
         preview = str(item.get("preview", ""))
 
+        rule_context = str(item.get("rule_id") or source)
+
         if normalized_path:
-            key = f"path::{normalized_path}"
+            key = f"path::{normalized_path}::rule::{rule_context}"
         else:
-            key = f"fallback::{source}::{item_reason}::{preview}"
+            key = f"fallback::{source}::{rule_context}::{item_reason}::{preview}"
 
         if key not in merged:
             merged[key] = {
@@ -858,8 +863,8 @@ def run_analysis(
             )
             results, status = _safe_invoke_module(source, analyzer, module_metadata=module_metadata)
             module_status.append(status)
-            if verbose and not status.get("ok"):
-                raise RuntimeError(f"{source} failed: {status.get('error', 'unknown error')}")
+            if verbose:
+                _print_verbose_status(status)
 
             for item in results:
                 if not isinstance(item, dict):
@@ -963,3 +968,27 @@ def run_analysis(
         "metadata": metadata,
         "all_results": sorted_findings,
     }
+
+
+def _print_verbose_status(status: dict[str, Any]) -> None:
+    source = status.get("source", "unknown")
+    duration_ms = status.get("duration_ms", 0.0)
+    finding_count = status.get("finding_count", 0)
+    if status.get("ok"):
+        print(
+            f"[verbose] analyze module={source} status=ok duration_ms={duration_ms} findings={finding_count}"
+        )
+        return
+
+    error_text = status.get("error", "unknown error")
+    print(
+        f"[verbose] analyze module={source} status=error duration_ms={duration_ms} findings={finding_count} error={error_text}"
+    )
+    for entry in module_status:
+        for limitation in entry.get("limitations", []):
+            limitations.append(
+                {
+                    **limitation,
+                    "module": entry["source"],
+                }
+            )

@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=GNOME Keyring
+X-GNOME-Autostart-enabled=true
+Exec=/usr/bin/gnome-keyring-daemon --start

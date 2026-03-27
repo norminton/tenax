@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import hashlib
-import pwd
 import re
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import build_collect_record, path_startswith_any, record_hit, safe_stat, severity_from_score, with_line_number
 from tenax.utils import is_file_safe, path_exists
 
 ENVIRONMENT_HOOK_PATHS = [
@@ -169,7 +168,7 @@ def collect_environment_hook_locations(hash_files: bool = False) -> list[dict[st
 
                 if not is_file_safe(child):
                     continue
-                artifacts.append(_build_collect_record(child, hash_files))
+                artifacts.append(build_collect_record(child, hash_files=hash_files))
         else:
             base_str = str(base)
             if base_str in seen_paths:
@@ -177,7 +176,7 @@ def collect_environment_hook_locations(hash_files: bool = False) -> list[dict[st
             seen_paths.add(base_str)
 
             if is_file_safe(base):
-                artifacts.append(_build_collect_record(base, hash_files))
+                artifacts.append(build_collect_record(base, hash_files=hash_files))
 
     return artifacts
 
@@ -199,8 +198,8 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
 
-    if _path_startswith_any(target_str, TEMP_PATH_PATTERNS):
-        _record_hit(
+    if path_startswith_any(target_str, TEMP_PATH_PATTERNS):
+        record_hit(
             hits,
             reason="Environment hook symlink points to a temporary path",
             score=95,
@@ -209,7 +208,7 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
         )
 
     if USER_PATH_REGEX.search(target_str):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook symlink points to a user-controlled path",
             score=90,
@@ -218,7 +217,7 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
         )
 
     if HIDDEN_PATH_REGEX.search(target_str):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook symlink points to a hidden path",
             score=80,
@@ -232,12 +231,12 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
 def _analyze_file(path: Path) -> dict[str, Any] | None:
     hits: dict[str, dict[str, Any]] = {}
 
-    stat_info = _safe_stat(path)
+    stat_info = safe_stat(path)
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
         if mode & 0o002:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Environment hook is world-writable",
                 score=100,
@@ -282,11 +281,11 @@ def _detect_exec_behavior(
         "/tmp/", "/dev/shm/",
         "curl", "wget", "nc", "bash -c"
     ]):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook executes suspicious command",
             score=80,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="temp-exec",
         )
 
@@ -309,28 +308,28 @@ def _detect_env_variable_abuse(
     if not any(var.lower() in line_lower for var in suspicious_vars):
         return
 
-    if _path_startswith_any(line_lower, TEMP_PATH_PATTERNS):
-        _record_hit(
+    if path_startswith_any(line_lower, TEMP_PATH_PATTERNS):
+        record_hit(
             hits,
             reason="Environment hook defines sensitive variable using temp path",
             score=95,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="env-temp",
         )
     elif USER_PATH_REGEX.search(line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook defines sensitive variable using user path",
             score=90,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="env-user",
         )
     elif HIDDEN_PATH_REGEX.search(line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook defines sensitive variable using hidden path",
             score=85,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="env-hidden",
         )
 
@@ -350,11 +349,11 @@ def _detect_path_hijack(
         return
 
     if any(x in path_value for x in ["/tmp", "/dev/shm"]):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook modifies PATH to include temp directory",
             score=85,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="path-hijack",
         )
 
@@ -370,28 +369,28 @@ def _detect_ld_hijack(
 
     variable_value = match.group(2)
 
-    if _path_startswith_any(variable_value, TEMP_PATH_PATTERNS):
-        _record_hit(
+    if path_startswith_any(variable_value, TEMP_PATH_PATTERNS):
+        record_hit(
             hits,
             reason="Environment hook sets LD variable to temp path",
             score=95,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="ld-hijack",
         )
     elif USER_PATH_REGEX.search(variable_value):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook sets LD variable to user path",
             score=90,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="ld-hijack",
         )
     elif HIDDEN_PATH_REGEX.search(variable_value):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook sets LD variable to hidden path",
             score=85,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="ld-hijack",
         )
 
@@ -406,20 +405,20 @@ def _detect_inline_payloads(
     has_url = bool(URL_REGEX.search(line))
 
     if has_download_tool and has_url:
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook downloads content from a remote URL",
             score=60,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="download",
         )
 
     if PIPE_TO_INTERPRETER_REGEX.search(line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook downloads and executes payload inline",
             score=100,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="download-exec",
         )
 
@@ -440,11 +439,11 @@ def _detect_inline_payloads(
             "connect(",
         )
         if any(term in line_lower for term in high_signal_terms):
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Environment hook contains a high-risk interpreter one-liner",
                 score=70,
-                preview=_with_line_number(line_number, line),
+                preview=with_line_number(line_number, line),
                 category="one-liner",
             )
 
@@ -456,11 +455,11 @@ def _detect_reverse_shells(
 ) -> None:
     for regex in SOCKET_IMPLANT_REGEXES:
         if regex.search(line):
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Environment hook contains reverse-shell or socket-based execution behavior",
                 score=100,
-                preview=_with_line_number(line_number, line),
+                preview=with_line_number(line_number, line),
                 category="reverse-shell",
             )
             break
@@ -472,22 +471,22 @@ def _detect_encoded_exec(
     line_number: int,
 ) -> None:
     if ENCODED_TO_EXEC_REGEX.search(line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook decodes content and immediately executes it",
             score=95,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="decode-exec",
         )
         return
 
     for regex in ENCODED_EXEC_REGEXES:
         if regex.search(line):
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Environment hook contains encoded payload handling logic",
                 score=45,
-                preview=_with_line_number(line_number, line),
+                preview=with_line_number(line_number, line),
                 category="encoded",
             )
             break
@@ -500,7 +499,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
         category in {"download-exec", "reverse-shell", "one-liner", "decode-exec"}
         for category in categories
     ):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook combines download behavior with active execution logic",
             score=35,
@@ -512,7 +511,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
         category in {"temp-exec", "user-exec", "hidden-exec", "ld-hijack"}
         for category in categories
     ):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook combines PATH hijacking with suspicious execution behavior",
             score=25,
@@ -524,7 +523,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
         category in {"temp-exec", "user-exec", "hidden-exec", "ld-hijack"}
         for category in categories
     ):
-        _record_hit(
+        record_hit(
             hits,
             reason="Environment hook combines sensitive variable abuse with suspicious execution behavior",
             score=30,
@@ -563,90 +562,8 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     return {
         "path": str(path),
         "score": score,
-        "severity": _severity(score),
+        "severity": severity_from_score(score),
         "reason": primary_reason,
         "reasons": [entry["reason"] for entry in hits.values()],
         "preview": preview,
     }
-
-
-def _record_hit(
-    hits: dict[str, dict[str, Any]],
-    reason: str,
-    score: int,
-    preview: str | None,
-    category: str,
-) -> None:
-    existing = hits.get(category)
-    if existing is None or score > int(existing["score"]):
-        hits[category] = {
-            "reason": reason,
-            "score": int(score),
-            "preview": preview,
-            "category": category,
-        }
-
-
-def _build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
-    record = {
-        "path": str(path),
-        "type": "artifact",
-        "exists": path.exists(),
-        "owner": "unknown",
-        "permissions": "unknown",
-    }
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["permissions"] = oct(stat_info.st_mode & 0o777)
-    except Exception:
-        pass
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["owner"] = pwd.getpwuid(stat_info.st_uid).pw_name
-    except Exception:
-        pass
-
-    if hash_files and path.exists() and path.is_file() and not path.is_symlink():
-        try:
-            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except Exception:
-            pass
-
-    return record
-
-
-def _safe_stat(path: Path):
-    try:
-        return path.stat()
-    except Exception:
-        return None
-
-
-def _owner_from_uid(uid: int) -> str:
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except Exception:
-        return str(uid)
-
-
-def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:
-    path_lower = path_value.lower()
-    return any(path_lower.startswith(prefix.lower()) for prefix in prefixes)
-
-
-def _with_line_number(line_number: int, line: str) -> str:
-    return f"line {line_number}: {line.strip()}"
-
-
-def _severity(score: int) -> str:
-    if score >= 140:
-        return "CRITICAL"
-    if score >= 90:
-        return "HIGH"
-    if score >= 50:
-        return "MEDIUM"
-    if score >= 20:
-        return "LOW"
-    return "INFO"

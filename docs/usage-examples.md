@@ -85,6 +85,12 @@ Disable secondary reference following:
 tenax collect --mode minimal --no-follow-references
 ```
 
+List registered modules:
+
+```bash
+tenax list-modules --mode both
+```
+
 Sample terminal output:
 
 ```text

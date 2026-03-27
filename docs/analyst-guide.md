@@ -50,13 +50,13 @@ tenax analyze
 or, if not installed as a console script:
 
 ```text
-python main.py analyze
+python -m tenax.cli analyze
 ```
 
 If the host permits it and the investigation allows it, root-level execution is preferred:
 
 ```text
-sudo python main.py analyze
+sudo tenax analyze
 ```
 
 This matters because many high-value persistence surfaces are:
@@ -143,7 +143,7 @@ tenax analyze
 or:
 
 ```text
-sudo python main.py analyze
+sudo tenax analyze
 ```
 
 Review findings in priority order.
@@ -163,13 +163,13 @@ Focus first on:
 After initial prioritization, run:
 
 ```text
-tenax collect
+tenax collect --mode structured
 ```
 
 or:
 
 ```text
-sudo python main.py collect --hash
+sudo tenax collect --mode evidence --hash
 ```
 
 Use collection mode to:

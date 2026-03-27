@@ -3,20 +3,21 @@ from __future__ import annotations
 import getpass
 import grp
 import hashlib
-import json
 import os
 import pwd
 import posixpath
 import re
 import shutil
 import socket
-import tarfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from tenax.checks import BUILTIN_MODULES, COLLECT_SOURCES
+from tenax.collector_errors import build_error, categorize_exception
+from tenax.collector_output import write_collection_outputs
+from tenax.output_paths import resolve_collection_root, resolve_runtime_output_dir
 from tenax.scope import (
     apply_module_scope,
     build_scan_scope,
@@ -949,6 +950,13 @@ def _ingest_direct_artifact(
     errors: list[dict[str, Any]] = []
     host_path = _normalize_path(str(raw.get("path", "")).strip())
     if not host_path:
+        errors.append(
+            build_error(
+                error_type="parse_failure",
+                module=module,
+                message="Collector module returned an artifact without a usable path.",
+            )
+        )
         return None, [], errors
 
     normalized_path = scope_context.target_path_from_host(host_path) or host_path
@@ -961,6 +969,14 @@ def _ingest_direct_artifact(
 
     exists = bool(lstat_info or stat_info)
     if not exists and not options.include_missing:
+        errors.append(
+            build_error(
+                error_type="missing_path",
+                module=module,
+                path=normalized_path,
+                message="Artifact path was missing and include-missing is disabled.",
+            )
+        )
         return None, [], errors
 
     is_symlink = bool(lstat_info and path.is_symlink())
@@ -1130,6 +1146,14 @@ def _ingest_reference_artifact(
     ref.resolved = _normalize_path(ref.value)
     if host_resolved is None:
         ref.errors.append("failed to normalize reference path")
+        errors.append(
+            build_error(
+                error_type="parse_failure",
+                module=ref.parent_module,
+                path=ref.value,
+                message="Reference path could not be normalized.",
+            )
+        )
         return None, [], errors
 
     if _should_skip_path(ref.resolved or ref.value, options.exclude_patterns):
@@ -1144,6 +1168,14 @@ def _ingest_reference_artifact(
     exists = bool(lstat_info or stat_info)
     ref.exists = exists
     if not exists:
+        errors.append(
+            build_error(
+                error_type="missing_path",
+                module=ref.parent_module,
+                path=ref.resolved or ref.value,
+                message="Referenced path did not exist at collection time.",
+            )
+        )
         return None, [], errors
 
     is_symlink = bool(lstat_info and path.is_symlink())
@@ -1151,6 +1183,14 @@ def _ingest_reference_artifact(
     is_dir = bool(stat_info and path.is_dir())
 
     if is_dir:
+        errors.append(
+            build_error(
+                error_type="parse_failure",
+                module=ref.parent_module,
+                path=ref.resolved or ref.value,
+                message="Referenced path resolved to a directory and was not ingested as an artifact.",
+            )
+        )
         return None, [], errors
 
     symlink_target = None
@@ -1285,7 +1325,13 @@ def _summarize(artifacts: list[ArtifactRecord], references: list[ReferenceRecord
     }
 
 
-def _build_limitations(options: CollectionOptions, errors: list[dict[str, Any]], scope_context) -> list[dict[str, Any]]:
+def _build_limitations(
+    options: CollectionOptions,
+    errors: list[dict[str, Any]],
+    scope_context,
+    *,
+    module_status: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     limitations: list[dict[str, Any]] = [
         {
             "type": "mode",
@@ -1352,8 +1398,13 @@ def _build_limitations(options: CollectionOptions, errors: list[dict[str, Any]],
                 "code": "collection_errors",
                 "message": "One or more collection modules or artifact ingests reported errors.",
                 "error_count": len(errors),
+                "error_types": sorted({error.get("type", "module_failure") for error in errors}),
             }
         )
+
+    for status in module_status:
+        for limitation in status.get("limitations", []):
+            limitations.append({**limitation, "module": status["module"]})
 
     limitations.append(
         {
@@ -1364,98 +1415,6 @@ def _build_limitations(options: CollectionOptions, errors: list[dict[str, Any]],
     )
 
     return limitations
-
-
-def _write_json(path: Path, obj: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False)
-
-
-def _write_hashes(path: Path, artifacts: list[ArtifactRecord]) -> None:
-    lines: list[str] = []
-    for artifact in artifacts:
-        if artifact.sha256:
-            lines.append(f"{artifact.sha256}  {artifact.normalized_path}")
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _write_summary(
-    path: Path,
-    collection_id: str,
-    mode: str,
-    host: str,
-    user: str,
-    baseline_name: str | None,
-    summary: dict[str, Any],
-    artifacts: list[ArtifactRecord],
-    location_inventory: dict[str, list[str]],
-    limitations: list[dict[str, Any]],
-) -> None:
-    lines: list[str] = []
-    lines.append("=== TENAX COLLECT SUMMARY ===")
-    lines.append("")
-    lines.append(f"Collection ID: {collection_id}")
-    lines.append(f"Mode: {mode}")
-    lines.append(f"Host: {host}")
-    lines.append(f"User: {user}")
-    lines.append(f"Target Root: {next((item['target_root'] for item in limitations if item.get('code') == 'target_root'), 'unknown')}")
-    if baseline_name:
-        lines.append(f"Baseline Name: {baseline_name}")
-    lines.append("")
-    lines.append("--- Totals ---")
-    lines.append(f"Artifacts collected: {summary['artifact_count']}")
-    lines.append(f"Direct artifacts: {summary['direct_artifact_count']}")
-    lines.append(f"Reference artifacts: {summary['reference_artifact_count']}")
-    lines.append(f"References found: {summary['reference_count']}")
-    lines.append(f"Required references followed: {summary['followed_required_reference_count']} of {summary['required_reference_count']}")
-    lines.append(f"Artifacts copied: {summary['copied_artifact_count']}")
-    lines.append(f"Errors: {summary['error_count']}")
-    lines.append("")
-    if limitations:
-        lines.append("--- Limitations ---")
-        for limitation in limitations:
-            lines.append(f"- {limitation.get('message', 'Unknown limitation')}")
-        lines.append("")
-    lines.append("--- By Module ---")
-    for module_name, count in sorted(summary["module_counts"].items()):
-        lines.append(f"{module_name}: {count}")
-    lines.append("")
-    lines.append("--- Watched Locations Inventory ---")
-    for module, tree_lines in location_inventory.items():
-        lines.append(f"[{module}]")
-        for l in tree_lines:
-            lines.append(l)
-        lines.append("")
-    lines.append("--- Collected Artifacts ---")
-    for artifact in artifacts:
-        lines.append(f"[{artifact.id}] {artifact.module} | {artifact.artifact_type}")
-        lines.append(f"Path: {artifact.path}")
-        if artifact.host_path and artifact.host_path != artifact.path:
-            lines.append(f"Host Path: {artifact.host_path}")
-        lines.append(f"Discovery: {artifact.discovery_mode}")
-        lines.append(f"Collection Mode: {artifact.collection_mode}")
-        if artifact.discovered_from:
-            lines.append(f"Discovered From: {artifact.discovered_from}")
-        if artifact.reference_reason:
-            lines.append(f"Reference Reason: {artifact.reference_reason}")
-        if artifact.rationale.get("why_collected"):
-            lines.append(f"Why Collected: {'; '.join(artifact.rationale['why_collected'])}")
-        if artifact.sha256:
-            lines.append(f"SHA256: {artifact.sha256}")
-        if artifact.preview:
-            lines.append(f"Preview: {artifact.preview[:TEXT_PREVIEW_CHARS]}")
-        if artifact.limitations:
-            lines.append(f"Limitations: {'; '.join(artifact.limitations)}")
-        if artifact.copy_status.copied and artifact.copy_status.copied_to:
-            lines.append(f"Copied To: {artifact.copy_status.copied_to}")
-        lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-def _archive_directory(source_dir: Path, archive_path: Path) -> None:
-    with tarfile.open(archive_path, "w:gz") as tar:
-        tar.add(source_dir, arcname=source_dir.name)
-
 
 def run_collection(
     output_path=None,
@@ -1480,7 +1439,7 @@ def run_collection(
     options = CollectionOptions(
         mode=mode,
         modules=selected_modules,
-        output_dir=Path(output_path) if output_path else Path(__file__).resolve().parent.parent / "output",
+        output_dir=Path(output_path) if output_path else resolve_runtime_output_dir(),
         hash_files=hash_files,
         content=True,
         copy_files=profile["copies_direct_artifacts"],
@@ -1504,8 +1463,7 @@ def run_collection(
     collection_id = datetime.now(timezone.utc).strftime("collect_%Y%m%d_%H%M%S")
     host = socket.gethostname()
     user = getpass.getuser()
-    root_output_dir = options.output_dir / collection_id
-    root_output_dir.mkdir(parents=True, exist_ok=True)
+    root_output_dir = resolve_collection_root(options.output_dir, collection_id)
     (root_output_dir / "collected").mkdir(parents=True, exist_ok=True)
 
     evidence_root = None
@@ -1515,6 +1473,7 @@ def run_collection(
     artifacts: list[ArtifactRecord] = []
     references: list[ReferenceRecord] = []
     errors: list[dict[str, Any]] = []
+    module_status: list[dict[str, Any]] = []
     seen_artifact_paths: set[str] = set()
     seen_reference_paths: set[str] = set()
     artifact_index = 1
@@ -1523,14 +1482,37 @@ def run_collection(
         for module_name in options.modules:
             collector = CHECK_REGISTRY.get(module_name)
             if collector is None:
-                errors.append({"module": module_name, "error": "module not registered"})
+                errors.append(
+                    build_error(
+                        error_type="module_failure",
+                        module=module_name,
+                        message="Collection module is not registered.",
+                    )
+                )
+                module_status.append({"module": module_name, "ok": False, "limitations": []})
                 continue
 
             try:
                 module_artifacts = collector(hash_files=options.hash_files)
-            except Exception as e:
-                errors.append({"module": module_name, "error": str(e)})
+            except Exception as exc:
+                errors.append(
+                    build_error(
+                        error_type=categorize_exception(exc),
+                        module=module_name,
+                        message="Collection module execution failed.",
+                        exception=exc,
+                    )
+                )
+                module_status.append({"module": module_name, "ok": False, "limitations": []})
                 continue
+
+            module_status.append(
+                {
+                    "module": module_name,
+                    "ok": True,
+                    "limitations": getattr(collector, "_tenax_limitations", []),
+                }
+            )
 
             for raw in module_artifacts:
                 artifact, direct_refs, ingest_errors = _ingest_direct_artifact(
@@ -1558,12 +1540,29 @@ def run_collection(
             continue
         if ref.depth > options.max_reference_depth:
             ref.errors.append("max reference depth exceeded")
+            errors.append(
+                build_error(
+                    error_type="parse_failure",
+                    module=ref.parent_module,
+                    path=ref.value,
+                    message="Reference was not followed because max-reference-depth was exceeded.",
+                    context={"depth": ref.depth, "max_reference_depth": options.max_reference_depth},
+                )
+            )
             continue
         if not _should_follow_reference(ref, options):
             continue
         resolved = _resolve_reference_path(ref.value, scope_context)
         if not resolved:
             ref.errors.append("failed to resolve reference")
+            errors.append(
+                build_error(
+                    error_type="missing_path",
+                    module=ref.parent_module,
+                    path=ref.value,
+                    message="Reference path could not be resolved.",
+                )
+            )
             continue
         ref.resolved = _normalize_path(ref.value)
         target_resolved = ref.resolved or ref.value
@@ -1591,7 +1590,7 @@ def run_collection(
 
     summary = _summarize(artifacts, references, errors)
     location_inventory = _build_watched_locations_inventory(options.modules, scope_context)
-    limitations = _build_limitations(options, errors, scope_context)
+    limitations = _build_limitations(options, errors, scope_context, module_status=module_status)
 
     manifest = {
         "schema_version": COLLECTION_SCHEMA_VERSION,
@@ -1650,33 +1649,28 @@ def run_collection(
             "user_homes": [user.home for user in scope_context.target_users],
         },
         "limitations": limitations,
+        "module_status": module_status,
         "artifacts": [asdict(a) for a in artifacts],
         "references": [asdict(r) for r in references],
         "errors": errors,
     }
 
-    _write_json(root_output_dir / "manifest.json", manifest)
-    _write_json(root_output_dir / "artifacts.json", [asdict(a) for a in artifacts])
-    _write_json(root_output_dir / "references.json", [asdict(r) for r in references])
-    _write_json(root_output_dir / "errors.json", errors)
-    _write_hashes(root_output_dir / "hashes.txt", artifacts)
-    _write_summary(
-        root_output_dir / "summary.txt",
-        collection_id,
-        options.mode,
-        host,
-        user,
-        options.baseline_name,
-        summary,
-        artifacts,
-        location_inventory,
-        limitations,
+    archive_path = write_collection_outputs(
+        root_output_dir=root_output_dir,
+        manifest=manifest,
+        artifacts=artifacts,
+        references=[asdict(r) for r in references],
+        errors=errors,
+        collection_id=collection_id,
+        mode=options.mode,
+        host=host,
+        user=user,
+        baseline_name=options.baseline_name,
+        summary=summary,
+        location_inventory=location_inventory,
+        limitations=limitations,
+        archive=options.archive,
     )
-
-    archive_path = None
-    if options.archive:
-        archive_path = root_output_dir.parent / f"{collection_id}.tgz"
-        _archive_directory(root_output_dir, archive_path)
 
     print("=== TENAX COLLECT RESULTS ===")
     print(f"Mode: {options.mode}")

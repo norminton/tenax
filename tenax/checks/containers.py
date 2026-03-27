@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-import hashlib
-import pwd
 import re
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import (
+    build_collect_record,
+    owner_from_uid,
+    path_startswith_any,
+    record_hit,
+    safe_lstat,
+    safe_stat,
+    safe_walk,
+    severity_from_score,
+    with_line_number,
+)
 from tenax.utils import is_file_safe, path_exists
 
 CONTAINER_PATHS = [
@@ -134,6 +143,14 @@ ENTRYPOINT_CMD_REGEX = re.compile(
 
 CONTAINER_RUNTIME_REGEX = re.compile(r"\b(docker|podman|containerd|nerdctl)\b", re.IGNORECASE)
 
+_record_hit = record_hit
+_safe_walk = safe_walk
+_safe_stat = safe_stat
+_safe_lstat = safe_lstat
+_owner_from_uid = owner_from_uid
+_path_startswith_any = path_startswith_any
+_with_line_number = with_line_number
+
 
 def analyze_container_locations() -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
@@ -144,7 +161,7 @@ def analyze_container_locations() -> list[dict[str, Any]]:
             continue
 
         if base.is_dir():
-            for child in _safe_walk(base):
+            for child in safe_walk(base):
                 child_str = str(child)
                 if child_str in seen_paths:
                     continue
@@ -179,7 +196,7 @@ def collect_container_locations(hash_files: bool = False) -> list[dict[str, Any]
             continue
 
         if base.is_dir():
-            for child in _safe_walk(base):
+            for child in safe_walk(base):
                 child_str = str(child)
                 if child_str in seen_paths:
                     continue
@@ -187,7 +204,7 @@ def collect_container_locations(hash_files: bool = False) -> list[dict[str, Any]
 
                 if not is_file_safe(child):
                     continue
-                artifacts.append(_build_collect_record(child, hash_files=hash_files))
+                artifacts.append(build_collect_record(child, hash_files=hash_files))
         else:
             base_str = str(base)
             if base_str in seen_paths:
@@ -195,7 +212,7 @@ def collect_container_locations(hash_files: bool = False) -> list[dict[str, Any]
             seen_paths.add(base_str)
 
             if is_file_safe(base):
-                artifacts.append(_build_collect_record(base, hash_files=hash_files))
+                artifacts.append(build_collect_record(base, hash_files=hash_files))
 
     return artifacts
 
@@ -217,8 +234,8 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
 
-    if _path_startswith_any(target_str, TEMP_PATH_PATTERNS):
-        _record_hit(
+    if path_startswith_any(target_str, TEMP_PATH_PATTERNS):
+        record_hit(
             hits,
             reason="Container-related symlink target points into a temporary execution path",
             score=95,
@@ -227,7 +244,7 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
         )
 
     if USER_PATH_REGEX.search(target_str):
-        _record_hit(
+        record_hit(
             hits,
             reason="Container-related symlink target points into a user-controlled path",
             score=90,
@@ -236,7 +253,7 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
         )
 
     if HIDDEN_PATH_REGEX.search(target_str):
-        _record_hit(
+        record_hit(
             hits,
             reason="Container-related symlink target references a hidden path",
             score=80,
@@ -244,10 +261,10 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
             category="hidden-target",
         )
 
-    stat_info = _safe_lstat(path)
+    stat_info = safe_lstat(path)
     if stat_info and stat_info.st_uid != 0:
-        owner_name = _owner_from_uid(stat_info.st_uid)
-        _record_hit(
+        owner_name = owner_from_uid(stat_info.st_uid)
+        record_hit(
             hits,
             reason="Container-related symlink is owned by a non-root account",
             score=75,
@@ -261,13 +278,13 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
 def _analyze_file(path: Path) -> dict[str, Any] | None:
     hits: dict[str, dict[str, Any]] = {}
 
-    stat_info = _safe_stat(path)
+    stat_info = safe_stat(path)
     if stat_info:
         mode = stat_info.st_mode & 0o777
-        owner_name = _owner_from_uid(stat_info.st_uid)
+        owner_name = owner_from_uid(stat_info.st_uid)
 
         if stat_info.st_uid != 0:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Container-related file is owned by a non-root account",
                 score=75,
@@ -276,7 +293,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
             )
 
         if mode & 0o002:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Container-related file is world-writable",
                 score=100,
@@ -284,7 +301,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
                 category="permissions",
             )
         elif mode & 0o020:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Container-related file is group-writable",
                 score=60,
@@ -298,7 +315,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
         return _finalize_finding(path, hits)
 
     if b"\x00" in raw[:4096]:
-        _record_hit(
+        record_hit(
             hits,
             reason="Container-related artifact contains binary content",
             score=70,
@@ -713,108 +730,8 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     return {
         "path": str(path),
         "score": score,
-        "severity": _severity(score),
+        "severity": severity_from_score(score),
         "reason": primary_reason,
         "reasons": reasons,
         "preview": preview,
     }
-
-
-def _record_hit(
-    hits: dict[str, dict[str, Any]],
-    reason: str,
-    score: int,
-    preview: str | None,
-    category: str,
-) -> None:
-    existing = hits.get(category)
-    if existing is None or score > int(existing["score"]):
-        hits[category] = {
-            "reason": reason,
-            "score": int(score),
-            "preview": preview,
-            "category": category,
-        }
-
-
-def _build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
-    record = {
-        "path": str(path),
-        "type": "artifact",
-        "exists": path.exists(),
-        "owner": "unknown",
-        "permissions": "unknown",
-    }
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["permissions"] = oct(stat_info.st_mode & 0o777)
-    except Exception:
-        pass
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["owner"] = pwd.getpwuid(stat_info.st_uid).pw_name
-    except Exception:
-        pass
-
-    if hash_files and path.exists() and path.is_file() and not path.is_symlink():
-        try:
-            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except Exception:
-            pass
-
-    return record
-
-
-def _safe_walk(base: Path) -> list[Path]:
-    output: list[Path] = []
-    try:
-        for child in base.rglob("*"):
-            if child.is_file() or child.is_symlink():
-                output.append(child)
-    except Exception:
-        return output
-    return output
-
-
-def _safe_stat(path: Path):
-    try:
-        return path.stat()
-    except Exception:
-        return None
-
-
-def _safe_lstat(path: Path):
-    try:
-        return path.lstat()
-    except Exception:
-        return None
-
-
-def _owner_from_uid(uid: int) -> str:
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except Exception:
-        return str(uid)
-
-
-def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:
-    path_lower = path_value.lower()
-    return any(path_lower.startswith(prefix.lower()) for prefix in prefixes)
-
-
-def _with_line_number(line_number: int, line: str) -> str:
-    return f"line {line_number}: {line.strip()}"
-
-
-def _severity(score: int) -> str:
-    if score >= 140:
-        return "CRITICAL"
-    if score >= 90:
-        return "HIGH"
-    if score >= 50:
-        return "MEDIUM"
-    if score >= 20:
-        return "LOW"
-    return "INFO"

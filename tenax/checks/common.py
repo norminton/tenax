@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import pwd
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,18 @@ from tenax.utils import build_collect_record as _build_collect_record
 
 def build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
     return _build_collect_record(path, hash_files=hash_files)
+
+
+def build_collect_record_with_metadata(
+    path: Path,
+    *,
+    hash_files: bool = False,
+    extra_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    record = build_collect_record(path, hash_files=hash_files)
+    if extra_fields:
+        record.update(extra_fields)
+    return record
 
 
 def safe_iterdir(path: Path) -> list[Path]:
@@ -65,6 +78,13 @@ def with_line_number(line_number: int, line: str) -> str:
     return f"line {line_number}: {line.strip()}"
 
 
+def with_line_number_clamped(line_number: int, line: str, *, max_length: int = 220) -> str:
+    flattened = " ".join(line.split())
+    if len(flattened) > max_length:
+        flattened = flattened[: max_length - 3] + "..."
+    return f"L{line_number}: {flattened}"
+
+
 def record_hit(
     hits: dict[str, dict[str, Any]],
     reason: str,
@@ -95,6 +115,13 @@ def severity_from_score(score: int) -> str:
     if score >= 20:
         return "LOW"
     return "INFO"
+
+
+def sha256_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except Exception:
+        return None
 
 
 def _select_investigator_preview(hits: dict[str, dict[str, Any]]) -> str | None:

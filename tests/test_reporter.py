@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tenax import output_paths
 from tenax import reporter
 
 
@@ -71,8 +72,8 @@ def test_output_results_recovers_project_output_dir_from_virtualenv_site_package
     fake_reporter.parent.mkdir(parents=True)
     fake_reporter.write_text("# reporter stub\n", encoding="utf-8")
 
-    monkeypatch.setattr(reporter, "__file__", str(fake_reporter))
-    monkeypatch.setattr(reporter.sys, "prefix", str(repo_root / ".venv"))
+    monkeypatch.setattr(output_paths, "__file__", str(fake_reporter))
+    monkeypatch.setattr(output_paths.sys, "prefix", str(repo_root / ".venv"))
     monkeypatch.chdir(tmp_path)
 
     reporter.output_results(
@@ -84,3 +85,20 @@ def test_output_results_recovers_project_output_dir_from_virtualenv_site_package
 
     saved_files = sorted((repo_root / "output").glob("analyze_*.json"))
     assert len(saved_files) == 1
+
+
+def test_resolve_runtime_output_dir_falls_back_to_working_tree_not_site_packages(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_site_packages = tmp_path / "venv" / "lib" / "python3.12" / "site-packages" / "tenax" / "output_paths.py"
+    fake_site_packages.parent.mkdir(parents=True)
+    fake_site_packages.write_text("# output paths stub\n", encoding="utf-8")
+
+    monkeypatch.setattr(output_paths, "__file__", str(fake_site_packages))
+    monkeypatch.setattr(output_paths.sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.chdir(tmp_path)
+
+    output_dir = output_paths.resolve_runtime_output_dir()
+
+    assert output_dir == tmp_path / "output"

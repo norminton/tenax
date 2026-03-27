@@ -5,7 +5,9 @@ from pathlib import Path
 
 from tenax.analyzer import run_analysis
 from tenax.banner import show_startup_banner
+from tenax.checks import ANALYZE_SOURCES, COLLECT_SOURCES, BUILTIN_MODULES
 from tenax.collector import run_collection
+from tenax import __version__
 
 
 def _csv_to_list(value: str) -> list[str]:
@@ -18,7 +20,29 @@ def build_parser() -> argparse.ArgumentParser:
         description="Linux persistence triage and artifact collection tool.",
         formatter_class=argparse.RawTextHelpFormatter,
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = subparsers.add_parser(
+        "list-modules",
+        help="List registered analyze and collect modules.",
+    )
+    list_parser.add_argument(
+        "--mode",
+        choices=["analyze", "collect", "both"],
+        default="both",
+        help="Limit output to analyze modules, collect modules, or both.",
+    )
+    list_parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Render module discovery output as text or json.",
+    )
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -272,5 +296,41 @@ def main() -> None:
             exclude_patterns=tuple(args.exclude_path) if args.exclude_path else (),
             root_prefix=args.root_prefix,
         )
+    elif args.command == "list-modules":
+        _print_module_catalog(mode=args.mode, output_format=args.format)
     else:
         parser.print_help()
+
+
+def _print_module_catalog(*, mode: str, output_format: str) -> None:
+    analyze_names = sorted(ANALYZE_SOURCES)
+    collect_names = sorted(COLLECT_SOURCES)
+    if output_format == "json":
+        import json
+
+        payload = {
+            "analyze": analyze_names if mode in {"analyze", "both"} else [],
+            "collect": collect_names if mode in {"collect", "both"} else [],
+            "modules": {
+                name: {
+                    "display_name": module.metadata.display_name,
+                    "description": module.metadata.description,
+                    "scopes": list(module.metadata.scopes),
+                }
+                for name, module in sorted(BUILTIN_MODULES.items())
+                if mode == "both"
+                or (mode == "analyze" and name in ANALYZE_SOURCES)
+                or (mode == "collect" and name in COLLECT_SOURCES)
+            },
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
+    if mode in {"analyze", "both"}:
+        print("Analyze modules:")
+        for name in analyze_names:
+            print(f"- {name}")
+    if mode in {"collect", "both"}:
+        print("Collect modules:")
+        for name in collect_names:
+            print(f"- {name}")

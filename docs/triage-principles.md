@@ -36,13 +36,13 @@ tenax analyze
 or:
 
 ```text
-python main.py analyze
+python -m tenax.cli analyze
 ```
 
 If possible:
 
 ```text
-sudo python main.py analyze
+sudo tenax analyze
 ```
 
 Use the output to identify:

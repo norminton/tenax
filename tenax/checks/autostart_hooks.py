@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-import hashlib
-import pwd
 import re
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import (
+    build_collect_record,
+    owner_from_uid,
+    record_hit,
+    safe_stat,
+    severity_from_score,
+    with_line_number,
+)
 from tenax.utils import is_file_safe, path_exists
 
 AUTOSTART_PATHS = [
@@ -82,38 +88,8 @@ def collect_autostart_hook_locations(hash_files: bool = False) -> list[dict[str,
                 if not is_file_safe(child):
                     continue
 
-                artifacts.append(_build_collect_record(child, hash_files=hash_files))
-
+                artifacts.append(build_collect_record(child, hash_files=hash_files))
     return artifacts
-
-def _build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
-    record = {
-        "path": str(path),
-        "type": "artifact",
-        "exists": path.exists(),
-        "owner": "unknown",
-        "permissions": "unknown",
-    }
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["permissions"] = oct(stat_info.st_mode & 0o777)
-    except Exception:
-        pass
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["owner"] = pwd.getpwuid(stat_info.st_uid).pw_name
-    except Exception:
-        pass
-
-    if hash_files and path.exists() and path.is_file() and not path.is_symlink():
-        try:
-            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except Exception:
-            pass
-
-    return record
 
 def analyze_autostart_hook_locations() -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
@@ -143,14 +119,14 @@ def analyze_autostart_hook_locations() -> list[dict[str, Any]]:
 def _analyze_file(path: Path) -> dict[str, Any] | None:
     hits: dict[str, dict[str, Any]] = {}
 
-    stat_info = _safe_stat(path)
+    stat_info = safe_stat(path)
     if stat_info:
         if stat_info.st_uid != 0:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Autostart entry owned by non-root account",
                 score=60,
-                preview=f"owner={_owner_from_uid(stat_info.st_uid)}",
+                preview=f"owner={owner_from_uid(stat_info.st_uid)}",
                 category="ownership",
             )
 
@@ -175,16 +151,16 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
             hidden_flag = True
 
         if AUTOSTART_ENABLED_REGEX.match(stripped):
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Autostart entry explicitly enabled",
                 score=10,
-                preview=_with_line_number(line_number, stripped),
+                preview=with_line_number(line_number, stripped),
                 category="enabled",
             )
 
     if hidden_flag and exec_line:
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart entry is hidden but still defines execution",
             score=70,
@@ -202,65 +178,65 @@ def _analyze_exec_line(
     lower = exec_line.lower()
 
     if any(p in lower for p in TEMP_PATH_PATTERNS):
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart executes from a temporary path",
             score=90,
-            preview=_with_line_number(line_number, exec_line),
+            preview=with_line_number(line_number, exec_line),
             category="temp-exec",
         )
 
     if USER_PATH_REGEX.search(exec_line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart executes from user-controlled path",
             score=85,
-            preview=_with_line_number(line_number, exec_line),
+            preview=with_line_number(line_number, exec_line),
             category="user-exec",
         )
 
     if HIDDEN_PATH_REGEX.search(exec_line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart references hidden payload path",
             score=80,
-            preview=_with_line_number(line_number, exec_line),
+            preview=with_line_number(line_number, exec_line),
             category="hidden-path",
         )
 
     if DOWNLOAD_TOOL_REGEX.search(exec_line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart contains network download behavior",
             score=60,
-            preview=_with_line_number(line_number, exec_line),
+            preview=with_line_number(line_number, exec_line),
             category="download",
         )
 
     if PIPE_TO_INTERPRETER_REGEX.search(exec_line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart downloads and executes payload inline",
             score=100,
-            preview=_with_line_number(line_number, exec_line),
+            preview=with_line_number(line_number, exec_line),
             category="download-exec",
         )
 
     if ENCODED_REGEX.search(exec_line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart decodes base64 payload",
             score=70,
-            preview=_with_line_number(line_number, exec_line),
+            preview=with_line_number(line_number, exec_line),
             category="encoded",
         )
 
     if REVERSE_SHELL_REGEX.search(exec_line):
-        _record_hit(
+        record_hit(
             hits,
             reason="Autostart contains reverse shell behavior",
             score=100,
-            preview=_with_line_number(line_number, exec_line),
+            preview=with_line_number(line_number, exec_line),
             category="reverse-shell",
         )
 
@@ -290,48 +266,8 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     return {
         "path": str(path),
         "score": score,
-        "severity": _severity(score),
+        "severity": severity_from_score(score),
         "reason": primary_reason,
         "reasons": reasons,
         "preview": previews[0] if previews else None,
     }
-
-
-def _record_hit(hits, reason, score, preview, category):
-    if category not in hits or score > hits[category]["score"]:
-        hits[category] = {
-            "reason": reason,
-            "score": score,
-            "preview": preview,
-            "category": category,
-        }
-
-
-def _safe_stat(path: Path):
-    try:
-        return path.stat()
-    except Exception:
-        return None
-
-
-def _owner_from_uid(uid: int) -> str:
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except Exception:
-        return str(uid)
-
-
-def _with_line_number(n: int, line: str) -> str:
-    return f"line {n}: {line.strip()}"
-
-
-def _severity(score: int) -> str:
-    if score >= 140:
-        return "CRITICAL"
-    if score >= 90:
-        return "HIGH"
-    if score >= 50:
-        return "MEDIUM"
-    if score >= 20:
-        return "LOW"
-    return "INFO"

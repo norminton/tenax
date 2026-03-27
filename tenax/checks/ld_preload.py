@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-import hashlib
-import pwd
 import re
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import (
+    build_collect_record,
+    path_startswith_any,
+    record_hit,
+    safe_stat,
+    severity_from_score,
+    with_line_number,
+)
 from tenax.utils import is_file_safe, path_exists
 
 LD_PRELOAD_PATHS = [
@@ -120,7 +126,7 @@ def collect_ld_preload_locations(hash_files: bool = False) -> list[dict[str, Any
 
                 if not is_file_safe(child):
                     continue
-                artifacts.append(_build_collect_record(child, hash_files))
+                artifacts.append(build_collect_record(child, hash_files=hash_files))
         else:
             base_str = str(base)
             if base_str in seen_paths:
@@ -128,7 +134,7 @@ def collect_ld_preload_locations(hash_files: bool = False) -> list[dict[str, Any
             seen_paths.add(base_str)
 
             if is_file_safe(base):
-                artifacts.append(_build_collect_record(base, hash_files))
+                artifacts.append(build_collect_record(base, hash_files=hash_files))
 
     return artifacts
 
@@ -150,8 +156,8 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
 
-    if _path_startswith_any(target_str, TEMP_PATH_PATTERNS):
-        _record_hit(
+    if path_startswith_any(target_str, TEMP_PATH_PATTERNS):
+        record_hit(
             hits,
             reason="LD preload configuration symlink points to a temporary path",
             score=95,
@@ -160,7 +166,7 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
         )
 
     if USER_PATH_REGEX.search(target_str):
-        _record_hit(
+        record_hit(
             hits,
             reason="LD preload configuration symlink points to a user-controlled path",
             score=90,
@@ -169,7 +175,7 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
         )
 
     if HIDDEN_PATH_REGEX.search(target_str):
-        _record_hit(
+        record_hit(
             hits,
             reason="LD preload configuration symlink points to a hidden path",
             score=85,
@@ -183,12 +189,12 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
 def _analyze_file(path: Path) -> dict[str, Any] | None:
     hits: dict[str, dict[str, Any]] = {}
 
-    stat_info = _safe_stat(path)
+    stat_info = safe_stat(path)
     if stat_info:
         mode = stat_info.st_mode & 0o777
 
         if mode & 0o002:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="LD preload configuration is world-writable",
                 score=100,
@@ -256,40 +262,40 @@ def _analyze_library_path_value(
     line_number: int,
     variable_name: str,
 ) -> None:
-    if _path_startswith_any(value_lower, TEMP_PATH_PATTERNS):
-        _record_hit(
+    if path_startswith_any(value_lower, TEMP_PATH_PATTERNS):
+        record_hit(
             hits,
             reason=f"{variable_name} points to a temporary path",
             score=95,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="temp-library-path",
         )
 
     if USER_PATH_REGEX.search(value):
-        _record_hit(
+        record_hit(
             hits,
             reason=f"{variable_name} points to a user-controlled path",
             score=90,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="user-library-path",
         )
 
     if HIDDEN_PATH_REGEX.search(value):
-        _record_hit(
+        record_hit(
             hits,
             reason=f"{variable_name} points to a hidden path",
             score=85,
-            preview=_with_line_number(line_number, line),
+            preview=with_line_number(line_number, line),
             category="hidden-library-path",
         )
 
     if SHARED_OBJECT_REGEX.search(value):
         if SUSPICIOUS_SO_NAME_REGEX.search(value):
-            _record_hit(
+            record_hit(
                 hits,
                 reason=f"{variable_name} references a suspicious shared object name",
                 score=85,
-                preview=_with_line_number(line_number, line),
+                preview=with_line_number(line_number, line),
                 category="suspicious-so-name",
             )
 
@@ -301,7 +307,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
         category in {"temp-library-path", "user-library-path", "hidden-library-path"}
         for category in categories
     ):
-        _record_hit(
+        record_hit(
             hits,
             reason="LD_PRELOAD is combined with a high-risk library path",
             score=35,
@@ -310,7 +316,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
         )
 
     if "ld-preload" in categories and "direct-so-reference" in categories:
-        _record_hit(
+        record_hit(
             hits,
             reason="LD_PRELOAD directly references a shared object for forced library injection",
             score=30,
@@ -319,7 +325,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
         )
 
     if "direct-so-reference" in categories and "suspicious-so-name" in categories:
-        _record_hit(
+        record_hit(
             hits,
             reason="Shared object reference uses a suspicious library naming pattern",
             score=25,
@@ -353,89 +359,8 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     return {
         "path": str(path),
         "score": score,
-        "severity": _severity(score),
+        "severity": severity_from_score(score),
         "reason": primary_reason,
         "reasons": [entry["reason"] for entry in hits.values()],
         "preview": preview,
     }
-
-def _record_hit(
-    hits: dict[str, dict[str, Any]],
-    reason: str,
-    score: int,
-    preview: str | None,
-    category: str,
-) -> None:
-    existing = hits.get(category)
-    if existing is None or score > int(existing["score"]):
-        hits[category] = {
-            "reason": reason,
-            "score": int(score),
-            "preview": preview,
-            "category": category,
-        }
-
-
-def _build_collect_record(path: Path, hash_files: bool = False) -> dict[str, Any]:
-    record = {
-        "path": str(path),
-        "type": "artifact",
-        "exists": path.exists(),
-        "owner": "unknown",
-        "permissions": "unknown",
-    }
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["permissions"] = oct(stat_info.st_mode & 0o777)
-    except Exception:
-        pass
-
-    try:
-        stat_info = path.lstat() if path.is_symlink() else path.stat()
-        record["owner"] = pwd.getpwuid(stat_info.st_uid).pw_name
-    except Exception:
-        pass
-
-    if hash_files and path.exists() and path.is_file() and not path.is_symlink():
-        try:
-            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except Exception:
-            pass
-
-    return record
-
-
-def _safe_stat(path: Path):
-    try:
-        return path.stat()
-    except Exception:
-        return None
-
-
-def _owner_from_uid(uid: int) -> str:
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except Exception:
-        return str(uid)
-
-
-def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:
-    path_lower = path_value.lower()
-    return any(path_lower.startswith(prefix.lower()) for prefix in prefixes)
-
-
-def _with_line_number(line_number: int, line: str) -> str:
-    return f"line {line_number}: {line.strip()}"
-
-
-def _severity(score: int) -> str:
-    if score >= 140:
-        return "CRITICAL"
-    if score >= 90:
-        return "HIGH"
-    if score >= 50:
-        return "MEDIUM"
-    if score >= 20:
-        return "LOW"
-    return "INFO"

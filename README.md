@@ -52,6 +52,7 @@ Tenax now ships with `pyproject.toml` packaging metadata and a console entry poi
 ```bash
 python -m pip install .
 tenax --help
+tenax --version
 ```
 
 If pip falls back to a user install, the `tenax` launcher is typically written under
@@ -104,6 +105,16 @@ tenax collect \
   --modules ssh,pam,systemd \
   --archive
 ```
+
+List the registered analyzer and collector modules:
+
+```bash
+tenax list-modules --mode both
+```
+
+By default, both `tenax analyze` and `tenax collect` write runtime output under the project `output/`
+directory when running from a source checkout, or under the current working directory's discovered
+Tenax project root in editable/installed workflows. This avoids writing into `site-packages`.
 
 ## Example Analyze Output
 
@@ -231,6 +242,8 @@ Run the suite on Linux or WSL Ubuntu. The GitHub Actions workflow is Ubuntu-base
 - [Architecture overview](docs/architecture.md)
 - [Usage examples](docs/usage-examples.md)
 - [Analyst playbook](docs/README.md)
+- [Output schemas](docs/output-schemas.md)
+- [Build workflow](docs/build-workflow.md)
 
 ## License
 

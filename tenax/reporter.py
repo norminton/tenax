@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import sys
 from collections import defaultdict
-from datetime import datetime
-from pathlib import Path
 from typing import Any
+
+from tenax.output_paths import resolve_output_file
 
 SEVERITY_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 
@@ -23,15 +22,12 @@ def output_results(
     saved_results = results
     terminal_results = display_results if display_results is not None else results
 
-    output_dir = _get_tenax_output_dir()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     extension = "json" if output_format == "json" else "txt"
-    auto_output_file = output_dir / f"{mode}_{timestamp}.{extension}"
-
-    explicit_output_file = None
-    if output_path:
-        output_path = Path(output_path)
-        explicit_output_file = output_path / f"{mode}_{timestamp}.{extension}" if output_path.is_dir() else output_path
+    auto_output_file, explicit_output_file = resolve_output_file(
+        mode=mode,
+        extension=extension,
+        explicit_path=output_path,
+    )
 
     full_render = _render(mode, saved_results, output_format, metadata)
     auto_output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -183,50 +179,3 @@ def _ensure_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
-
-
-def _get_tenax_output_dir() -> Path:
-    repo_root = _find_project_root()
-    output_dir = repo_root / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-def _find_project_root() -> Path:
-    for start in (Path.cwd().resolve(), Path(__file__).resolve(), Path(sys.prefix).resolve()):
-        candidate = _find_repo_root_from(start)
-        if candidate is not None:
-            return candidate
-
-    for start in (Path(__file__).resolve(), Path(sys.prefix).resolve()):
-        candidate = _find_virtualenv_project_root(start)
-        if candidate is not None:
-            return candidate
-
-    return Path.cwd().resolve()
-
-
-def _find_repo_root_from(start: Path) -> Path | None:
-    markers = ("pyproject.toml", "README.md")
-
-    for candidate in (start, *start.parents):
-        if "site-packages" in candidate.parts or "dist-packages" in candidate.parts:
-            continue
-        if all((candidate / marker).exists() for marker in markers) and (candidate / "tenax").is_dir():
-            return candidate
-
-    return None
-
-
-def _find_virtualenv_project_root(start: Path) -> Path | None:
-    markers = ("pyproject.toml", "README.md")
-    venv_names = {".venv", "venv", "env"}
-
-    for candidate in (start, *start.parents):
-        if candidate.name not in venv_names:
-            continue
-        project_root = candidate.parent
-        if all((project_root / marker).exists() for marker in markers) and (project_root / "tenax").is_dir():
-            return project_root
-
-    return None

@@ -214,6 +214,83 @@ def test_run_analysis_reports_coverage_and_module_failures(
     assert missing_status["error"] == "unknown source"
 
 
+def test_run_analysis_verbose_prints_module_execution_details(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        analyzer,
+        "ANALYZE_SOURCES",
+        {
+            "systemd": lambda: [_finding("/tmp/demo.service", score=91, reason="bad unit")],
+            "cron": lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        },
+    )
+    monkeypatch.setattr(analyzer, "output_results", lambda **kwargs: None)
+
+    analyzer.run_analysis(
+        output_format="json",
+        sources=["systemd", "cron"],
+        verbose=True,
+        top=5,
+    )
+
+    output = capsys.readouterr().out
+    assert "module=systemd" in output
+    assert "findings=1" in output
+    assert "module=cron" in output
+    assert "status=error" in output
+    assert "boom" in output
+
+
+def test_run_analysis_keeps_distinct_rule_contexts_on_same_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        analyzer,
+        "ANALYZE_SOURCES",
+        {
+            "systemd": lambda: [
+                _finding("/tmp/persist.service", score=95, reason="systemd service executes payload from temp path", tags=["service-definition", "temp-path"]),
+                _finding("/tmp/persist.service", score=80, reason="systemd service downloads remote payload", tags=["service-definition", "network-retrieval"]),
+            ],
+        },
+    )
+    monkeypatch.setattr(analyzer, "output_results", lambda **kwargs: None)
+
+    payload = analyzer.run_analysis(output_format="json", sources=["systemd"], top=10)
+
+    assert payload["summary"]["filtered_finding_count"] == 2
+    assert {item["path"] for item in payload["results"]} == {"/tmp/persist.service"}
+    assert len({item["rule_id"] for item in payload["results"]}) == 2
+
+
+def test_run_analysis_reports_missing_getcap_as_limitation_not_finding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def capability_module() -> list[dict[str, object]]:
+        setattr(
+            capability_module,
+            "_tenax_limitations",
+            [
+                {
+                    "type": "unsupported_dependency",
+                    "code": "missing_getcap",
+                    "message": "Capability analysis skipped because the 'getcap' command is unavailable.",
+                }
+            ],
+        )
+        return []
+
+    monkeypatch.setattr(analyzer, "ANALYZE_SOURCES", {"capabilities": capability_module})
+    monkeypatch.setattr(analyzer, "output_results", lambda **kwargs: None)
+
+    payload = analyzer.run_analysis(output_format="json", sources=["capabilities"], top=10)
+
+    assert payload["results"] == []
+    assert any(item["code"] == "missing_getcap" for item in payload["metadata"]["limitations"])
+
+
 def test_run_analysis_saves_full_filtered_results_while_terminal_display_honors_top(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -389,6 +466,23 @@ def test_cli_collect_requires_explicit_mode_and_dispatches_new_contract(
         "exclude_patterns": (),
         "root_prefix": Path("/mnt/image"),
     }
+
+
+def test_cli_supports_version_and_module_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parser = cli.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--version"])
+
+    monkeypatch.setattr(sys, "argv", ["tenax", "list-modules", "--mode", "analyze"])
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert "Analyze modules:" in output
+    assert "systemd" in output
 
 
 def test_run_analysis_scans_all_discovered_users_for_user_scoped_modules(

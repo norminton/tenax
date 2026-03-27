@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-import hashlib
-import pwd
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import (
+    build_collect_record_with_metadata,
+    owner_from_uid,
+    path_startswith_any,
+    record_hit,
+    safe_stat,
+    severity_from_score,
+)
 from tenax.utils import path_exists
 
 CAPABILITY_SCAN_PATHS = [
@@ -75,22 +81,27 @@ MEDIUM_RISK_CAPABILITIES = {
 }
 
 ELF_MAGIC = b"\x7fELF"
+MODULE_LIMITATION_KEY = "_tenax_limitations"
 
 
 def analyze_capabilities() -> list[dict[str, Any]]:
+    setattr(analyze_capabilities, MODULE_LIMITATION_KEY, [])
     findings: list[dict[str, Any]] = []
 
     if shutil.which("getcap") is None:
-        return [
-            {
-                "path": "getcap",
-                "score": 0,
-                "severity": "INFO",
-                "reason": "getcap command not available; capability scan skipped",
-                "reasons": ["getcap command not available; capability scan skipped"],
-                "preview": "Install libcap tools to enable capability scanning",
-            }
-        ]
+        setattr(
+            analyze_capabilities,
+            MODULE_LIMITATION_KEY,
+            [
+                {
+                    "type": "unsupported_dependency",
+                    "code": "missing_getcap",
+                    "message": "Capability analysis skipped because the 'getcap' command is unavailable.",
+                    "dependency": "getcap",
+                }
+            ],
+        )
+        return []
 
     for scan_path in CAPABILITY_SCAN_PATHS:
         if not path_exists(scan_path):
@@ -101,9 +112,22 @@ def analyze_capabilities() -> list[dict[str, Any]]:
 
 
 def collect_capabilities(hash_files: bool = False) -> list[dict[str, Any]]:
+    setattr(collect_capabilities, MODULE_LIMITATION_KEY, [])
     artifacts: list[dict[str, Any]] = []
 
     if shutil.which("getcap") is None:
+        setattr(
+            collect_capabilities,
+            MODULE_LIMITATION_KEY,
+            [
+                {
+                    "type": "unsupported_dependency",
+                    "code": "missing_getcap",
+                    "message": "Capability collection skipped because the 'getcap' command is unavailable.",
+                    "dependency": "getcap",
+                }
+            ],
+        )
         return artifacts
 
     seen_paths: set[str] = set()
@@ -204,7 +228,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
     if not capability_names:
         return None
 
-    _record_hit(
+    record_hit(
         hits,
         reason="File has Linux capabilities assigned",
         score=10,
@@ -214,7 +238,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
 
     for capability in capability_names:
         if capability in HIGH_RISK_CAPABILITIES:
-            _record_hit(
+            record_hit(
                 hits,
                 reason=f"High-risk Linux capability present: {capability}",
                 score=HIGH_RISK_CAPABILITIES[capability],
@@ -222,7 +246,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
                 category=f"cap-{capability}",
             )
         elif capability in MEDIUM_RISK_CAPABILITIES:
-            _record_hit(
+            record_hit(
                 hits,
                 reason=f"Elevated Linux capability present: {capability}",
                 score=MEDIUM_RISK_CAPABILITIES[capability],
@@ -230,8 +254,8 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
                 category=f"cap-{capability}",
             )
 
-    if _path_startswith_any(path_lower, TEMP_PATH_PATTERNS):
-        _record_hit(
+    if path_startswith_any(path_lower, TEMP_PATH_PATTERNS):
+        record_hit(
             hits,
             reason="Capabilities assigned to a file in a temporary path",
             score=100,
@@ -239,7 +263,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
             category="temp-path",
         )
     elif USER_PATH_REGEX.search(path_value):
-        _record_hit(
+        record_hit(
             hits,
             reason="Capabilities assigned to a file in a user-controlled path",
             score=95,
@@ -247,7 +271,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
             category="user-path",
         )
     elif HIDDEN_PATH_REGEX.search(path_value):
-        _record_hit(
+        record_hit(
             hits,
             reason="Capabilities assigned to a file at a hidden path",
             score=85,
@@ -256,7 +280,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
         )
 
     if path_lower.startswith("/opt/"):
-        _record_hit(
+        record_hit(
             hits,
             reason="Capabilities assigned to a file under /opt",
             score=35,
@@ -264,13 +288,13 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
             category="opt-path",
         )
 
-    stat_info = _safe_stat(path_obj)
+    stat_info = safe_stat(path_obj)
     if stat_info:
         mode = stat_info.st_mode & 0o777
-        owner_name = _owner_from_uid(stat_info.st_uid)
+        owner_name = owner_from_uid(stat_info.st_uid)
 
         if stat_info.st_uid != 0:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Capability-bearing file is owned by a non-root account",
                 score=95,
@@ -279,7 +303,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
             )
 
         if mode & 0o002:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Capability-bearing file is world-writable",
                 score=100,
@@ -287,7 +311,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
                 category="permissions",
             )
         elif mode & 0o020:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Capability-bearing file is group-writable",
                 score=65,
@@ -299,7 +323,7 @@ def _analyze_capability_record(path_obj: Path, capabilities_text: str) -> dict[s
             try:
                 raw = path_obj.read_bytes()[:4]
                 if raw != ELF_MAGIC:
-                    _record_hit(
+                    record_hit(
                         hits,
                         reason="Capabilities assigned to a non-ELF file",
                         score=70,
@@ -318,7 +342,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
 
     if any(category.startswith("cap-cap_setuid") or category.startswith("cap-cap_setgid") for category in categories):
         if "user-path" in categories or "temp-path" in categories or "ownership" in categories:
-            _record_hit(
+            record_hit(
                 hits,
                 reason="Privilege-related capabilities are assigned to a high-risk file location",
                 score=35,
@@ -327,7 +351,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
             )
 
     if any(category.startswith("cap-cap_sys_admin") or category.startswith("cap-cap_sys_ptrace") for category in categories):
-        _record_hit(
+        record_hit(
             hits,
             reason="Capabilities include highly sensitive system-level privilege",
             score=25,
@@ -336,7 +360,7 @@ def _apply_compound_behavior_bonuses(hits: dict[str, dict[str, Any]]) -> None:
         )
 
     if "permissions" in categories and ("user-path" in categories or "temp-path" in categories):
-        _record_hit(
+        record_hit(
             hits,
             reason="Writable file with capabilities exists in a high-risk path",
             score=40,
@@ -385,7 +409,7 @@ def _finalize_finding(
     return {
         "path": str(path_obj),
         "score": score,
-        "severity": _severity(score),
+        "severity": severity_from_score(score),
         "reason": primary_reason,
         "reasons": reasons,
         "preview": preview,
@@ -419,72 +443,8 @@ def _extract_capability_names(capabilities_text: str) -> list[str]:
 
 
 def _build_collect_record(path: Path, capabilities_text: str, hash_files: bool = False) -> dict[str, Any]:
-    record = {
-        "path": str(path),
-        "type": "artifact",
-        "exists": path.exists(),
-        "owner": "unknown",
-        "permissions": "unknown",
-        "capabilities": capabilities_text,
-    }
-
-    stat_info = _safe_stat(path)
-    if stat_info:
-        record["permissions"] = oct(stat_info.st_mode & 0o777)
-        record["owner"] = _owner_from_uid(stat_info.st_uid)
-
-    if hash_files and path.exists() and path.is_file():
-        try:
-            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
-            pass
-
-    return record
-
-
-def _safe_stat(path: Path):
-    try:
-        return path.stat()
-    except OSError:
-        return None
-
-
-def _owner_from_uid(uid: int) -> str:
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except Exception:
-        return str(uid)
-
-
-def _path_startswith_any(path_value: str, prefixes: tuple[str, ...]) -> bool:
-    path_lower = path_value.lower()
-    return any(path_lower.startswith(prefix.lower()) for prefix in prefixes)
-
-
-def _record_hit(
-    hits: dict[str, dict[str, Any]],
-    reason: str,
-    score: int,
-    preview: str | None,
-    category: str,
-) -> None:
-    existing = hits.get(category)
-    if existing is None or score > int(existing["score"]):
-        hits[category] = {
-            "reason": reason,
-            "score": int(score),
-            "preview": preview,
-            "category": category,
-        }
-
-
-def _severity(score: int) -> str:
-    if score >= 140:
-        return "CRITICAL"
-    if score >= 90:
-        return "HIGH"
-    if score >= 50:
-        return "MEDIUM"
-    if score >= 20:
-        return "LOW"
-    return "INFO"
+    return build_collect_record_with_metadata(
+        path,
+        hash_files=hash_files,
+        extra_fields={"capabilities": capabilities_text},
+    )

@@ -1,0 +1,2 @@
+#!/bin/sh
+start-stop-daemon --start --exec /usr/sbin/cron

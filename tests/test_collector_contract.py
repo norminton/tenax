@@ -174,8 +174,15 @@ def test_run_collection_surfaces_errors_and_partial_coverage_metadata(tmp_path: 
 
     assert manifest["summary"]["artifact_count"] == 0
     assert manifest["summary"]["error_count"] == 1
-    assert errors == [{"module": "missing-module", "error": "module not registered"}]
+    assert errors == [
+        {
+            "type": "module_failure",
+            "message": "Collection module is not registered.",
+            "module": "missing-module",
+        }
+    ]
     assert any(item["code"] == "collection_errors" for item in manifest["limitations"])
+    assert manifest["module_status"] == [{"module": "missing-module", "ok": False, "limitations": []}]
 
 
 def test_run_collection_root_prefix_preserves_target_lineage_and_root_aware_references(
@@ -320,3 +327,67 @@ def test_run_collection_parsed_outputs_prioritize_high_value_investigator_struct
     assert cron_record["parsed"]["jobs"][0]["schedule"] == "* * * * *"
     assert pam_record["parsed"]["format"] == "pam"
     assert pam_record["parsed"]["modules"][0]["module"] == "pam_exec.so"
+
+
+def test_run_collection_archive_and_exclude_path_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    direct_artifact = tmp_path / "sshd_config"
+    excluded_reference = tmp_path / "skip-me.sh"
+    excluded_reference.write_text("#!/bin/sh\necho skip\n", encoding="utf-8")
+    direct_artifact.write_text(f"AuthorizedKeysCommand {excluded_reference}\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        collector,
+        "CHECK_REGISTRY",
+        {"ssh": lambda **kwargs: [{"path": str(direct_artifact)}]},
+    )
+
+    collector.run_collection(
+        output_path=tmp_path / "archive-out",
+        modules=["ssh"],
+        mode="evidence",
+        archive=True,
+        exclude_patterns=("skip-me.sh",),
+    )
+
+    run_dir = _latest_collection_dir(tmp_path / "archive-out")
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert (tmp_path / "archive-out" / f"{run_dir.name}.tgz").exists()
+    assert manifest["summary"]["artifact_count"] == 1
+    assert manifest["summary"]["reference_count"] == 1
+    assert all(item["path"] == str(direct_artifact) or item["discovery_mode"] == "direct" for item in manifest["artifacts"])
+
+
+def test_run_collection_respects_max_reference_depth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    direct_artifact = tmp_path / "sshd_config"
+    level_one = tmp_path / "level-one.sh"
+    level_two = tmp_path / "level-two.sh"
+    level_two.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    level_one.write_text(f"source {level_two}\n", encoding="utf-8")
+    direct_artifact.write_text(f"AuthorizedKeysCommand {level_one}\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        collector,
+        "CHECK_REGISTRY",
+        {"ssh": lambda **kwargs: [{"path": str(direct_artifact)}]},
+    )
+
+    collector.run_collection(
+        output_path=tmp_path / "depth-out",
+        modules=["ssh"],
+        mode="structured",
+        follow_references=True,
+        max_reference_depth=1,
+    )
+
+    run_dir = _latest_collection_dir(tmp_path / "depth-out")
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["summary"]["artifact_count"] == 2
+    assert any(error["message"].startswith("Reference was not followed") for error in manifest["errors"])
