@@ -704,7 +704,6 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "reverse-shell",
         "decode-exec",
         "temp-exec",
-        "path-hijack-risk",
         "ld-hijack-risk",
     ]):
         return None
