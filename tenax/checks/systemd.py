@@ -54,9 +54,18 @@ STANDARD_SYSTEM_PREFIXES = (
     "/bin/",
     "/sbin/",
     "/usr/lib/",
+    "/usr/libexec/",
+    "/usr/lib64/",
+    "/libexec/",
     "/lib/",
     "/lib/systemd/",
     "/usr/lib/systemd/",
+    "/usr/local/bin/",
+    "/usr/local/sbin/",
+    "/usr/local/libexec/",
+    "/opt/",
+    "/snap/",
+    "/nix/store/",
 )
 
 USER_PATH_REGEX = re.compile(
@@ -138,9 +147,13 @@ ENCODED_TO_EXEC_REGEX = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-STEALTH_PERSISTENCE_REGEXES = [
+CHMOD_SPECIAL_BITS_REGEXES = [
     re.compile(r"\bchmod\b\s+[ugoa]*\+s\b", re.IGNORECASE),
-    re.compile(r"\bchmod\b\s+[0-7]*[4567][0-7]{2}\b", re.IGNORECASE),
+    re.compile(r"\bchmod\b\s+0?[4567][0-7]{3}\b", re.IGNORECASE),
+]
+
+CHMOD_MODE_TOKEN_REGEX = re.compile(r"\bchmod\b\s+([^\s]+)", re.IGNORECASE)
+STEALTH_PERSISTENCE_REGEXES = [
     re.compile(r"\bsetcap\b", re.IGNORECASE),
     re.compile(r"\bchattr\b\s+\+i\b", re.IGNORECASE),
 ]
@@ -458,12 +471,25 @@ def _detect_exec_directives(
 
         _record_hit(
             hits,
-            reason=f"Systemd {directive} references a non-standard executable path",
-            score=55,
+            reason=f"Systemd {directive} executes from an uncommon absolute path outside standard packaged locations",
+            score=35,
             preview=_with_line_number(line_number, line),
             category="nonstandard-exec",
         )
         break
+
+    command_token = _extract_command_token(value)
+    if not command_token or command_token.startswith("/"):
+        return
+
+    if command_token.startswith(("./", "../", "~/")) or "/" in command_token:
+        _record_hit(
+            hits,
+            reason=f"Systemd {directive} uses a relative or user-relative execution path",
+            score=75,
+            preview=_with_line_number(line_number, line),
+            category="relative-exec",
+        )
 
 
 def _detect_environment_directives(
@@ -860,17 +886,19 @@ def _detect_stealth_or_privilege_changes(
     line_lower: str,
     line_number: int,
 ) -> None:
+    chmod_signal = _classify_chmod_risk(line, line_lower)
+    if chmod_signal:
+        _record_hit(
+            hits,
+            reason=chmod_signal["reason"],
+            score=chmod_signal["score"],
+            preview=_with_line_number(line_number, line),
+            category=chmod_signal["category"],
+        )
+        return
+
     for regex in STEALTH_PERSISTENCE_REGEXES:
         if regex.search(line):
-            if "chmod 755" in line_lower or "chmod 755 " in line_lower:
-                return
-            if "chmod 644" in line_lower or "chmod 644 " in line_lower:
-                return
-            if "chmod 600" in line_lower or "chmod 600 " in line_lower:
-                return
-            if "chown root:root" in line_lower:
-                return
-
             _record_hit(
                 hits,
                 reason="Systemd unit contains stealth or privilege-manipulation logic",
@@ -981,6 +1009,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
     high_confidence_categories = {
         "temp-exec",
         "user-exec",
+        "relative-exec",
         "hidden-path",
         "download-exec",
         "reverse-shell",
@@ -1077,3 +1106,62 @@ def _with_line_number(line_number: int, line: str) -> str:
 
 def _severity(score: int) -> str:
     return severity_from_score(score)
+
+
+def _extract_command_token(value: str) -> str:
+    tokenized = value.lstrip("-@:+!").strip()
+    if not tokenized:
+        return ""
+    return tokenized.split()[0].strip("\"'")
+
+
+def _classify_chmod_risk(line: str, line_lower: str) -> dict[str, Any] | None:
+    if "chmod" not in line_lower:
+        return None
+
+    for regex in CHMOD_SPECIAL_BITS_REGEXES:
+        if regex.search(line):
+            return {
+                "reason": "Systemd unit applies special permission bits associated with stealth or privilege escalation",
+                "score": 85,
+                "category": "stealth-privilege",
+            }
+
+    mode_match = CHMOD_MODE_TOKEN_REGEX.search(line)
+    if not mode_match:
+        return None
+
+    mode_token = mode_match.group(1).strip("\"'")
+    target_paths = re.findall(r"(/[^\s'\";|]+)", line)
+    targets_high_risk = any(
+        _path_startswith_any(path.lower(), TEMP_PATH_PATTERNS)
+        or USER_PATH_REGEX.search(path)
+        or HIDDEN_PATH_REGEX.search(path)
+        for path in target_paths
+    )
+    if not targets_high_risk:
+        return None
+
+    if _chmod_mode_grants_broad_access(mode_token):
+        return {
+            "reason": "Systemd unit weakens permissions on a high-risk payload path",
+            "score": 80,
+            "category": "stealth-privilege",
+        }
+
+    return None
+
+
+def _chmod_mode_grants_broad_access(mode_token: str) -> bool:
+    cleaned = mode_token.strip()
+    if not cleaned:
+        return False
+
+    if re.fullmatch(r"[0-7]{3,4}", cleaned):
+        mode_value = int(cleaned[-3:], 8)
+        return bool(mode_value & 0o022 or mode_value & 0o111)
+
+    symbolic = cleaned.lower()
+    broad_write = "+w" in symbolic and any(subject in symbolic for subject in ("a", "o", "g", "ugo", "go"))
+    adds_exec = "+x" in symbolic
+    return broad_write or adds_exec

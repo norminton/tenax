@@ -225,7 +225,7 @@ def _derive_tags(
 
     tags.add(source.replace("_", "-"))
 
-    if source in {"systemd", "pam", "sudoers", "ld_preload"}:
+    if source in {"pam", "sudoers", "ld_preload"}:
         tags.add("root-execution")
     if source in {"cron", "at_jobs", "systemd", "rc_init", "autostart_hooks"}:
         tags.add("scheduled-start")
@@ -239,13 +239,15 @@ def _derive_tags(
             tags.update({"temp-path", "suspicious-location"})
         if path_lower.startswith("/etc/systemd") or "/systemd/" in path_lower:
             tags.add("service-definition")
+        if "/systemd/user/" in path_lower or "/.config/systemd/user/" in path_lower:
+            tags.add("user-scope")
         if path_lower.endswith("authorized_keys"):
             tags.update({"ssh-persistence", "credential-surface"})
         if path_lower.endswith(".desktop"):
             tags.add("autostart-entry")
         if _contains_any(path_lower, USER_SCOPE_MARKERS):
             tags.add("user-scope")
-        if path_lower.startswith(SYSTEM_PATH_PREFIXES):
+        if path_lower.startswith(SYSTEM_PATH_PREFIXES) and "/systemd/user/" not in path_lower:
             tags.add("system-scope")
         if path_lower.startswith("/usr/local/bin") or path_lower.startswith("/usr/local/sbin"):
             tags.add("local-binary-path")
@@ -289,6 +291,12 @@ def _build_rule_name(source: str, tags: list[str]) -> str:
     source_label = source.replace("_", " ")
     if "world-writable" in tags:
         return f"{source_label} writable persistence surface"
+    if "temp-path" in tags:
+        return f"{source_label} temporary-path execution"
+    if "preload-hook" in tags:
+        return f"{source_label} preload hijack behavior"
+    if "shell-execution" in tags:
+        return f"{source_label} inline shell execution behavior"
     if "network-retrieval" in tags:
         return f"{source_label} network retrieval behavior"
     if "service-definition" in tags:

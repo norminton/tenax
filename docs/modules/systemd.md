@@ -138,9 +138,12 @@ Path:
 Legitimate systemd usage typically involves:
 
 - Services located in `/lib/systemd/system/`  
+- Packaged user units located in `/usr/lib/systemd/user/`  
 - Execution of binaries in:
   - `/usr/bin/`  
   - `/usr/sbin/`  
+  - `/usr/libexec/`  
+  - other package-managed system locations such as `/usr/lib/`  
 - Descriptive and well-documented unit names  
 - No inline shell execution  
 
@@ -175,6 +178,7 @@ ExecStart=/usr/sbin/sshd -D
 
 - Custom services for legitimate admin automation  
 - Development or testing services  
+- Benign maintenance commands such as tightening log permissions (`chmod 0640 /var/log/...`) without other suspicious context  
 
 ---
 
