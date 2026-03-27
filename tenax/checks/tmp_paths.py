@@ -15,6 +15,17 @@ TMP_PATHS = [
     Path("/run/shm"),
 ]
 
+TENAX_COLLECT_DIR_REGEX = re.compile(r"^collect_\d{8}_\d{6}$", re.IGNORECASE)
+PYTEST_RUN_DIR_REGEX = re.compile(r"^pytest-\d+$", re.IGNORECASE)
+TENAX_GENERATED_FILENAMES = {
+    "artifacts.json",
+    "errors.json",
+    "hashes.txt",
+    "manifest.json",
+    "references.json",
+    "summary.txt",
+}
+
 TEMP_PATH_PATTERNS = (
     "/tmp/",
     "/var/tmp/",
@@ -128,11 +139,13 @@ DIRECT_EXEC_REGEX = re.compile(
     \b(
         sh|bash|dash|ash|ksh|zsh|
         python|python2|python3|perl|ruby|php|
-        env|exec|source|\.
+        env|exec|source
     )\b
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+DOT_SOURCE_REGEX = re.compile(r"(^|[;&|()]\s*)\.\s+(/[^\s'\";|,]+)", re.IGNORECASE)
 
 SUSPICIOUS_FILE_EXT_REGEX = re.compile(
     r"\.(sh|py|pl|rb|php|elf|bin|out|so)$",
@@ -208,6 +221,8 @@ def collect_tmp_paths(hash_files: bool = False) -> list[dict[str, Any]]:
 
 
 def _analyze_artifact(path: Path) -> dict[str, Any] | None:
+    if _should_suppress_tmp_artifact(path):
+        return None
     if path.is_symlink():
         return _analyze_symlink(path)
     if path.is_file():
@@ -469,7 +484,7 @@ def _detect_temp_or_user_exec(
     line_lower: str,
     line_number: int,
 ) -> None:
-    if not DIRECT_EXEC_REGEX.search(line):
+    if not _looks_like_exec_line(line):
         return
 
     if any(x in line_lower for x in [
@@ -803,6 +818,37 @@ def _contains_high_risk_path(line_lower: str) -> bool:
 
 def _with_line_number(line_number: int, line: str) -> str:
     return f"line {line_number}: {line.strip()}"
+
+
+def _looks_like_exec_line(line: str) -> bool:
+    return bool(DIRECT_EXEC_REGEX.search(line) or DOT_SOURCE_REGEX.search(line))
+
+
+def _should_suppress_tmp_artifact(path: Path) -> bool:
+    return _is_tenax_generated_artifact(path) or _is_test_harness_artifact(path)
+
+
+def _is_tenax_generated_artifact(path: Path) -> bool:
+    parts = [part.lower() for part in path.parts]
+    if not any(TENAX_COLLECT_DIR_REGEX.match(part) for part in parts):
+        return False
+
+    if path.name.lower() in TENAX_GENERATED_FILENAMES:
+        return True
+
+    return "collected" in parts
+
+
+def _is_test_harness_artifact(path: Path) -> bool:
+    parts = [part.lower() for part in path.parts]
+    for part in parts:
+        if part in {".pytest_cache", "__pycache__"}:
+            return True
+        if "pytest-of-" in part or PYTEST_RUN_DIR_REGEX.match(part):
+            return True
+        if part.startswith("tmp_pytest-of-"):
+            return True
+    return False
 
 
 def _severity(score: int) -> str:

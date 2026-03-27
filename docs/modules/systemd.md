@@ -153,6 +153,10 @@ Example:
 ExecStart=/usr/sbin/sshd -D
 ```
 
+Packaged user-unit location by itself is not treated as suspicious by default. Tenax now requires stronger behavioral evidence such as temporary-path execution, preload abuse, hidden payload paths, inline download-and-exec chains, or other clearly risky execution characteristics before surfacing packaged user units.
+
+Likewise, common distro timer patterns such as `Persistent=true` or ordinary scheduled maintenance timers are treated as low-signal context unless they are paired with suspicious execution behavior.
+
 ---
 
 ## What Malicious Use Looks Like

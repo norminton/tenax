@@ -154,6 +154,12 @@ Normal behavior:
 - not referenced by system startup mechanisms  
 - not repeatedly executed  
 
+### Default Tenax Noise Controls
+
+By default, Tenax does not treat its own generated collection bundles as fresh temporary-path findings. Collection outputs such as `manifest.json`, `artifacts.json`, `references.json`, `hashes.txt`, `summary.txt`, and collected copies are suppressed when they appear inside Tenax `collect_YYYYMMDD_HHMMSS` output trees.
+
+Obvious pytest-style harness directories are also suppressed by default so test fixtures in temporary directories do not pollute live-host triage output.
+
 ---
 
 ## What Malicious Use Looks Like

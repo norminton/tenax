@@ -141,11 +141,13 @@ DIRECT_EXEC_REGEX = re.compile(
     \b(
         sh|bash|dash|ash|ksh|zsh|
         python|python2|python3|perl|ruby|php|
-        exec|source|\.
+        exec|source
     )\b
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+DOT_SOURCE_REGEX = re.compile(r"(^|[;&|()]\s*)\.\s+(/[^\s'\";|,]+)", re.IGNORECASE)
 
 SUSPICIOUS_FILE_EXT_REGEX = re.compile(
     r"\.(sh|py|pl|rb|php|elf|bin|out|so)$",
@@ -358,7 +360,7 @@ def _detect_exec_behavior(
     line_lower: str,
     line_number: int,
 ) -> None:
-    if not DIRECT_EXEC_REGEX.search(line):
+    if not _looks_like_exec_line(line):
         return
 
     if any(x in line_lower for x in [
@@ -807,6 +809,10 @@ def _contains_high_risk_path(line_lower: str) -> bool:
 
 def _with_line_number(line_number: int, line: str) -> str:
     return shared_with_line_number(line_number, line)
+
+
+def _looks_like_exec_line(line: str) -> bool:
+    return bool(DIRECT_EXEC_REGEX.search(line) or DOT_SOURCE_REGEX.search(line))
 
 
 def _is_harmless_export(line: str, line_lower: str) -> bool:

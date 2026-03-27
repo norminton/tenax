@@ -159,6 +159,8 @@ Normal profiles:
 - Do not reference temporary directories  
 - Do not perform complex logic  
 
+Tenax treats ordinary distro/admin profile logic conservatively by default. Benign checks, prompts, exports, and setup flows in files such as `/etc/profile.d/*` are not supposed to surface unless they also include stronger persistence indicators such as temporary-path execution, preload abuse, command hijacking, or inline payload delivery.
+
 ---
 
 ## What Malicious Use Looks Like
