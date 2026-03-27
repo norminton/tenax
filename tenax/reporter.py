@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -192,8 +193,13 @@ def _get_tenax_output_dir() -> Path:
 
 
 def _find_project_root() -> Path:
-    for start in (Path.cwd().resolve(), Path(__file__).resolve()):
+    for start in (Path.cwd().resolve(), Path(__file__).resolve(), Path(sys.prefix).resolve()):
         candidate = _find_repo_root_from(start)
+        if candidate is not None:
+            return candidate
+
+    for start in (Path(__file__).resolve(), Path(sys.prefix).resolve()):
+        candidate = _find_virtualenv_project_root(start)
         if candidate is not None:
             return candidate
 
@@ -208,5 +214,19 @@ def _find_repo_root_from(start: Path) -> Path | None:
             continue
         if all((candidate / marker).exists() for marker in markers) and (candidate / "tenax").is_dir():
             return candidate
+
+    return None
+
+
+def _find_virtualenv_project_root(start: Path) -> Path | None:
+    markers = ("pyproject.toml", "README.md")
+    venv_names = {".venv", "venv", "env"}
+
+    for candidate in (start, *start.parents):
+        if candidate.name not in venv_names:
+            continue
+        project_root = candidate.parent
+        if all((project_root / marker).exists() for marker in markers) and (project_root / "tenax").is_dir():
+            return project_root
 
     return None

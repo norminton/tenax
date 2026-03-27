@@ -56,3 +56,31 @@ def test_output_results_writes_full_analyze_artifact_to_project_output_and_keeps
     terminal = capsys.readouterr().out
     assert '"count": 1' in terminal
     assert 'Saved full analyze output to:' in terminal
+
+
+def test_output_results_recovers_project_output_dir_from_virtualenv_site_packages(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "tenax"
+    (repo_root / "tenax").mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='tenax'\n", encoding="utf-8")
+    (repo_root / "README.md").write_text("# Tenax\n", encoding="utf-8")
+
+    fake_reporter = repo_root / ".venv" / "lib" / "python3.12" / "site-packages" / "tenax" / "reporter.py"
+    fake_reporter.parent.mkdir(parents=True)
+    fake_reporter.write_text("# reporter stub\n", encoding="utf-8")
+
+    monkeypatch.setattr(reporter, "__file__", str(fake_reporter))
+    monkeypatch.setattr(reporter.sys, "prefix", str(repo_root / ".venv"))
+    monkeypatch.chdir(tmp_path)
+
+    reporter.output_results(
+        mode="analyze",
+        results=[{"finding_id": "TX-1", "severity": "CRITICAL", "source": "systemd", "path": "/tmp/one", "score": 100}],
+        output_format="json",
+        metadata={"summary": {"filtered_finding_count": 1, "displayed_finding_count": 1, "saved_finding_count": 1}},
+    )
+
+    saved_files = sorted((repo_root / "output").glob("analyze_*.json"))
+    assert len(saved_files) == 1
