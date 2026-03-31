@@ -441,8 +441,12 @@ def test_run_analysis_drops_secondary_module_tag_for_overlapping_shell_environme
     monkeypatch.setitem(analyzer.ANALYZE_SOURCES, "shell_profiles", lambda: [shell_hit])
     monkeypatch.setitem(analyzer.ANALYZE_SOURCES, "environment_hooks", lambda: [env_hit])
 
-    results = analyzer.run_analysis(selected_sources=["shell_profiles", "environment_hooks"], output_path=None)
-    finding = results["findings"][0]
+    payload = analyzer.run_analysis(
+        output_format="json",
+        sources=["shell_profiles", "environment_hooks"],
+        top=10,
+    )
+    finding = payload["results"][0]
 
     assert "shell-profiles" in finding["tags"]
     assert "environment-hooks" not in finding["tags"]
