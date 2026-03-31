@@ -203,3 +203,20 @@ def test_containers_ignores_plain_systemd_unit_without_container_context(tmp_pat
     )
 
     assert containers._analyze_file(artifact) is None
+
+
+def test_rc_init_detects_direct_user_controlled_payload_path_without_wrapper(tmp_path: Path) -> None:
+    artifact = tmp_path / "local-rc"
+    artifact.write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  start) /home/appsvc/.local/bin/.wrap-login ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+
+    finding = rc_init._analyze_file(artifact)
+
+    assert finding is not None
+    assert_basic_module_finding(finding, artifact)
+    assert any("user-controlled" in reason.lower() for reason in finding["reasons"])

@@ -367,6 +367,60 @@ def test_run_analysis_does_not_report_user_filters_for_default_top_and_sort_only
     assert "results_filtered" not in limitation_codes
 
 
+def test_run_analysis_merges_overlapping_shell_and_environment_hits_on_same_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path_value = "/etc/profile.d/system-shell-env.sh"
+    preview = "line 1: export BASH_ENV=/tmp/.pulse-meta/runtime-helper"
+
+    monkeypatch.setattr(
+        analyzer,
+        "ANALYZE_SOURCES",
+        {
+            "shell_profiles": lambda: [
+                _finding(
+                    path_value,
+                    score=95,
+                    reason="Shell profile sets variable to temp path",
+                    preview=preview,
+                    tags=["system-scope", "user-persistence"],
+                )
+            ],
+            "environment_hooks": lambda: [
+                _finding(
+                    path_value,
+                    score=85,
+                    reason="Environment hook defines sensitive variable using hidden path",
+                    preview=preview,
+                    tags=["system-scope", "user-persistence", "hidden"],
+                )
+            ],
+        },
+    )
+    monkeypatch.setattr(analyzer, "output_results", lambda **kwargs: None)
+
+    payload = analyzer.run_analysis(
+        output_format="json",
+        sources=["shell_profiles", "environment_hooks"],
+        top=10,
+    )
+
+    assert payload["summary"]["filtered_finding_count"] == 1
+    assert payload["summary"]["deduplicated_count"] == 1
+    assert payload["results"][0]["dedupe"]["merged_count"] == 2
+
+
+def test_derive_tags_does_not_label_sync_path_as_network_retrieval() -> None:
+    tags = analyzer._derive_tags(
+        source="shell_profiles",
+        path_value="/etc/profile.d/system-prompt-cache.sh",
+        reason="Shell profile uses PROMPT_COMMAND with suspicious behavior",
+        preview="line 1: export PROMPT_COMMAND='/var/tmp/.cache-sync/net-policy-sync >/dev/null 2>&1'",
+    )
+
+    assert "network-retrieval" not in tags
+
+
 def test_cli_main_dispatches_repaired_analyze_contract_flags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

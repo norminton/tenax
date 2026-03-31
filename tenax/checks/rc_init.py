@@ -549,6 +549,30 @@ def _detect_temp_or_user_exec(
     line_lower: str,
     line_number: int,
 ) -> None:
+    path_matches = re.findall(r"(/[^\s'\";|]+)", line)
+    for matched_path in path_matches:
+        matched_lower = matched_path.lower()
+
+        if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):
+            _record_hit(
+                hits,
+                reason="Init artifact directly references a temporary-path executable or payload",
+                score=85,
+                preview=_with_line_number(line_number, line),
+                category="temp-exec",
+            )
+            return
+
+        if USER_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="Init artifact directly references a user-controlled executable or payload path",
+                score=80,
+                preview=_with_line_number(line_number, line),
+                category="user-exec",
+            )
+            return
+
     for regex in TEMP_EXEC_REGEXES:
         if regex.search(line):
             if _path_startswith_any(line_lower, TEMP_PATH_PATTERNS):

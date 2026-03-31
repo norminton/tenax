@@ -6,6 +6,7 @@ from collections import Counter
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
+import re
 
 from tenax.checks import ANALYZE_SOURCES, BUILTIN_MODULES
 from tenax.module_interface import apply_scoring_profile, determine_environment_label
@@ -63,37 +64,28 @@ USER_SCOPE_MARKERS = (
     "authorized_keys",
 )
 
-SUSPICIOUS_KEYWORDS: dict[str, str] = {
-    "curl": "network-retrieval",
-    "wget": "network-retrieval",
-    "fetch": "network-retrieval",
-    "scp ": "network-retrieval",
-    "ftp ": "network-retrieval",
-    "tftp ": "network-retrieval",
-    "nc ": "network-retrieval",
-    "ncat": "network-retrieval",
-    "socat": "network-retrieval",
-    "bash -c": "shell-execution",
-    "sh -c": "shell-execution",
-    "python -c": "shell-execution",
-    "perl -e": "shell-execution",
-    "nohup": "detached-execution",
-    "setsid": "detached-execution",
-    "base64": "encoded-payload",
-    "mkfifo": "pipe-staging",
-    "ld_preload": "preload-hook",
-    "execstart=": "service-exec",
-    "exec=": "service-exec",
-    "hidden=true": "hidden-autostart",
-    "nopasswd": "sudo-trust",
-    "all=(all)": "broad-sudo",
-    "all=(all:all)": "broad-sudo",
-    "authorized_keys": "ssh-persistence",
-    "pam": "auth-hook",
-    "cap_": "capabilities",
-    "docker": "container-hook",
-    "podman": "container-hook",
+OVERLAPPING_FINDING_SOURCES = {
+    "shell_profiles",
+    "environment_hooks",
 }
+
+SUSPICIOUS_KEYWORD_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b(curl|wget|fetch|scp|ftp|tftp|nc|ncat|socat)\b", re.IGNORECASE), "network-retrieval"),
+    (re.compile(r"\b(bash|sh|python|perl)\s+-(c|e)\b", re.IGNORECASE), "shell-execution"),
+    (re.compile(r"\b(nohup|setsid)\b", re.IGNORECASE), "detached-execution"),
+    (re.compile(r"\bbase64\b", re.IGNORECASE), "encoded-payload"),
+    (re.compile(r"\bmkfifo\b", re.IGNORECASE), "pipe-staging"),
+    (re.compile(r"\bld_preload\b", re.IGNORECASE), "preload-hook"),
+    (re.compile(r"\bexecstart\s*=", re.IGNORECASE), "service-exec"),
+    (re.compile(r"\bexec\s*=", re.IGNORECASE), "service-exec"),
+    (re.compile(r"\bhidden\s*=\s*true\b", re.IGNORECASE), "hidden-autostart"),
+    (re.compile(r"\bnopasswd\b", re.IGNORECASE), "sudo-trust"),
+    (re.compile(r"\ball=\(all(?::all)?\)\s*all\b", re.IGNORECASE), "broad-sudo"),
+    (re.compile(r"\bauthorized_keys\b", re.IGNORECASE), "ssh-persistence"),
+    (re.compile(r"\bpam\b", re.IGNORECASE), "auth-hook"),
+    (re.compile(r"\bcap_[a-z0-9_]+\b", re.IGNORECASE), "capabilities"),
+    (re.compile(r"\b(docker|podman)\b", re.IGNORECASE), "container-hook"),
+)
 
 
 def _safe_invoke_module(
@@ -257,8 +249,8 @@ def _derive_tags(
         if path_lower.endswith((".service", ".timer", ".socket", ".mount", ".path", ".target")):
             tags.add("systemd-unit")
 
-    for keyword, tag in SUSPICIOUS_KEYWORDS.items():
-        if keyword in combined:
+    for pattern, tag in SUSPICIOUS_KEYWORD_PATTERNS:
+        if pattern.search(combined):
             tags.add(tag)
 
     if "world-writable" in combined or "writable by everyone" in combined:
@@ -395,7 +387,9 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         rule_context = str(item.get("rule_id") or source)
 
-        if normalized_path:
+        if normalized_path and preview and source in OVERLAPPING_FINDING_SOURCES:
+            key = f"path::{normalized_path}::preview::{preview}"
+        elif normalized_path:
             key = f"path::{normalized_path}::rule::{rule_context}"
         else:
             key = f"fallback::{source}::{rule_context}::{item_reason}::{preview}"
