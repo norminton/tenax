@@ -363,6 +363,39 @@ def _detect_exec_behavior(
     if not _looks_like_exec_line(line):
         return
 
+    for matched_path in re.findall(r"(/[^\s'\";|,]+)", line):
+        matched_lower = matched_path.lower()
+
+        if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):
+            _record_hit(
+                hits,
+                reason="Shell profile executes content from a temporary path",
+                score=80,
+                preview=_with_line_number(line_number, line),
+                category="temp-exec",
+            )
+            return
+
+        if USER_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="Shell profile executes content from a user-controlled path",
+                score=80,
+                preview=_with_line_number(line_number, line),
+                category="temp-exec",
+            )
+            return
+
+        if HIDDEN_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="Shell profile executes content from a hidden path",
+                score=80,
+                preview=_with_line_number(line_number, line),
+                category="temp-exec",
+            )
+            return
+
     if any(x in line_lower for x in [
         "/tmp/", "/dev/shm/",
         "curl", "wget", "nc", "bash -c"

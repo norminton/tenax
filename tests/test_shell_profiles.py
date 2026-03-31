@@ -36,3 +36,16 @@ def test_shell_profiles_still_detects_temp_path_prompt_hook(tmp_path) -> None:
 
     assert finding is not None
     assert any("prompt_command" in reason.lower() or "prompt command" in reason.lower() for reason in finding["reasons"])
+
+
+def test_shell_profiles_detects_direct_user_profile_source_hook(tmp_path) -> None:
+    artifact = tmp_path / ".bash_profile"
+    artifact.write_text(
+        "source /home/analyst/.cache/.profile-hook\n",
+        encoding="utf-8",
+    )
+
+    finding = shell_profiles._analyze_file(artifact)
+
+    assert finding is not None
+    assert any("user-controlled path" in reason.lower() for reason in finding["reasons"])

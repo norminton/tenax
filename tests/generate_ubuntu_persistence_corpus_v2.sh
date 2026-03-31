@@ -515,23 +515,24 @@ done
 for i in "${!PERSONAS[@]}"; do
   p="${PERSONAS[$i]}"
   mktext benign ssh "$ROOT_PREFIX/home/$p/.ssh/authorized_keys" 0600 "benign authorized_keys" \
-    "$(pubkey "$p" "$((10+i))")$(pubkey "$p-workstation" "$((20+i))")"
+    "$(pubkey "$p" "$((10+i))")
+$(pubkey "$p-workstation" "$((20+i))")"
 done
 
 mkfile suspicious ssh "$ROOT_PREFIX/home/analyst/.ssh/authorized_keys" 0600 "suspicious forced-command key" <<EOF
-$(pubkey "analyst" 11)command="/home/analyst/.cache/.profile-hook",no-agent-forwarding,no-port-forwarding $(pubkey "analyst-admin" 31)
+command="/home/analyst/.cache/.profile-hook",no-agent-forwarding,no-port-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPersistLab31KeyMaterialOnly analyst-admin@tenax-lab
 EOF
 
 mkfile suspicious ssh "$ROOT_PREFIX/home/appsvc/.ssh/authorized_keys" 0600 "suspicious forced-command key" <<EOF
-$(pubkey "appsvc" 12)command="/home/appsvc/.local/bin/.wrap-login",restrict $(pubkey "appsvc-batch" 32)
+command="/home/appsvc/.local/bin/.wrap-login",restrict ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPersistLab32KeyMaterialOnly appsvc-batch@tenax-lab
 EOF
 
 mkfile suspicious ssh "$ROOT_PREFIX/home/dbadmin/.ssh/authorized_keys" 0600 "suspicious forced-command key" <<EOF
-$(pubkey "dbadmin" 13)command="/usr/bin/python3 /home/dbadmin/.local/share/.session-helper",from="10.10.0.0/16" $(pubkey "dbadmin-job" 33)
+command="/usr/bin/python3 /home/dbadmin/.local/share/.session-helper",from="10.10.0.0/16" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPersistLab33KeyMaterialOnly dbadmin-job@tenax-lab
 EOF
 
 mkfile gray ssh "$ROOT_PREFIX/home/opsadmin/.ssh/authorized_keys" 0600 "gray forced-command key" <<EOF
-$(pubkey "opsadmin" 14)command="/usr/local/sbin/patch-prep-window",restrict $(pubkey "opsadmin-maint" 34)
+command="/usr/local/sbin/patch-prep-window",restrict ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPersistLab34KeyMaterialOnly opsadmin-maint@tenax-lab
 EOF
 
 BENIGN_PAM=(

@@ -220,3 +220,17 @@ def test_rc_init_detects_direct_user_controlled_payload_path_without_wrapper(tmp
     assert finding is not None
     assert_basic_module_finding(finding, artifact)
     assert any("user-controlled" in reason.lower() for reason in finding["reasons"])
+
+
+def test_environment_hooks_detects_direct_user_controlled_exec_without_temp_path(tmp_path: Path) -> None:
+    artifact = tmp_path / "site-hook.sh"
+    artifact.write_text(
+        "/bin/bash /home/devops/.cache/.profile-hook\n",
+        encoding="utf-8",
+    )
+
+    finding = environment_hooks._analyze_file(artifact)
+
+    assert finding is not None
+    assert_basic_module_finding(finding, artifact)
+    assert any("user-controlled path" in reason.lower() for reason in finding["reasons"])
