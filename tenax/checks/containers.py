@@ -355,7 +355,16 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
 
 def _looks_like_container_artifact(path: Path, content: str) -> bool:
     path_lower = str(path).lower()
-    if any(token in path_lower for token in ("/docker", "/containers", "container", ".docker")):
+    if any(
+        token in path_lower
+        for token in (
+            "/docker/",
+            "/containers/",
+            "/containerd/",
+            "/.docker/",
+            "/.config/containers/",
+        )
+    ):
         return True
 
     # Avoid double-reporting plain systemd services through the container module
