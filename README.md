@@ -121,31 +121,68 @@ Tenax project root in editable/installed workflows. This avoids writing into `si
 This sample reflects the current text renderer in `tenax/reporter.py`.
 
 ```text
-=== TENAX ANALYZE RESULTS ===
-Findings shown in terminal: 2 of 2
-Full findings saved: 2
-Modules: 2/2 succeeded
+══════════════════════════════════════════════════════
+              TENAX PERSISTENCE ANALYSIS
+══════════════════════════════════════════════════════
+🔥 CRITICAL FINDINGS: 1
+HIGH FINDINGS: 1
+MEDIUM FINDINGS: 0
+LOW FINDINGS: 0
+INFO FINDINGS: 0
+Displayed: 2 of 2
+Saved Findings: 2
+Modules Succeeded: 2/2
+
 Limitations:
 - Only the selected analyzer modules were executed.
 - Analysis targeted mounted root /mnt/forensics/image.
 - User-scoped modules enumerated 3 local user home paths.
 - Unreadable target paths may reduce observable findings; only accessible artifacts can be analyzed.
 
-CRITICAL (1)
-TX-SYSTEMD-8A15F2C1 CRITICAL systemd /etc/systemd/system/dbus-update.service
-  score=115 rule=TX-RULE-SYSTEMD-SERVICE_DEFINITION
-  reason=systemd service executes payload from a temporary path
-  tags=root-execution, scheduled-start, service-definition, system-scope, systemd, systemd-unit, temp-path
-  preview:
-    line 7: ExecStart=/tmp/.cache/dbus-update --daemon
+🔥 CRITICAL FINDINGS: 1
+┌────────────────────────────────────────────┐
+│ SYSTEMD (SYSTEM-LEVEL)                     │
+└────────────────────────────────────────────┘
 
-HIGH (1)
-TX-SSH-4A32A7E0 HIGH ssh /root/.ssh/authorized_keys
-  score=74 rule=TX-RULE-SSH-SSH_PERSISTENCE
-  reason=authorized_keys entry uses command= restriction/execution
-  tags=credential-surface, ssh, ssh-persistence, user-persistence, user-scope
-  preview:
-    command="/usr/local/bin/keywrap" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+[CRITICAL] SYSTEMD SERVICE DEFINITION ANOMALY
+ID: TX-SYSTEMD-8A15F2C1
+User: system
+File: /etc/systemd/system/dbus-update.service
+
+Score: 115
+Rule: TX-RULE-SYSTEMD-SERVICE_DEFINITION
+Reason: systemd service executes payload from a temporary path
+
+Exec:
+  line 7 -> ExecStart=/tmp/.cache/dbus-update --daemon
+
+Tags: root-execution, scheduled-start, service-definition, system-scope, systemd, systemd-unit, temp-path
+------------------------------------------------------
+
+HIGH FINDINGS: 1
+┌────────────────────────────────────────────┐
+│ SSH (USER PERSISTENCE)                     │
+└────────────────────────────────────────────┘
+
+[HIGH] SSH SUSPICIOUS PERSISTENCE ARTIFACT
+ID: TX-SSH-4A32A7E0
+User: root
+File: /root/.ssh/authorized_keys
+
+Score: 74
+Rule: TX-RULE-SSH-SSH_PERSISTENCE
+Reason: authorized_keys entry uses command= restriction/execution
+
+Exec:
+  command="/usr/local/bin/keywrap" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+
+Tags: credential-surface, ssh, ssh-persistence, user-persistence, user-scope
+------------------------------------------------------
+
+══════════════════════════════════════════════════════
+Output saved:
+output/analyze_20260331_120000.txt
+══════════════════════════════════════════════════════
 ```
 
 ## Example Collect Output

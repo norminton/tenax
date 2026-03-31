@@ -102,3 +102,58 @@ def test_resolve_runtime_output_dir_falls_back_to_working_tree_not_site_packages
     output_dir = output_paths.resolve_runtime_output_dir()
 
     assert output_dir == tmp_path / "output"
+
+
+def test_render_text_groups_findings_by_severity_and_module_with_footer() -> None:
+    rendered = reporter.render_text(
+        mode="analyze",
+        results=[
+            {
+                "finding_id": "TX-SYSTEMD-1",
+                "severity": "CRITICAL",
+                "source": "systemd",
+                "path": "/etc/systemd/system/demo.service",
+                "score": 115,
+                "rule_id": "TX-RULE-SYSTEMD-TEMP_PATH",
+                "rule_name": "systemd temporary-path execution",
+                "reason": "Systemd service executes payload from a temporary path",
+                "preview": "line 7: ExecStart=/tmp/.cache/dbus-update --daemon",
+                "tags": ["systemd", "temp-path", "system-scope"],
+                "scope": "system",
+            },
+            {
+                "finding_id": "TX-SSH-1",
+                "severity": "HIGH",
+                "source": "ssh",
+                "path": "/root/.ssh/authorized_keys",
+                "score": 74,
+                "rule_id": "TX-RULE-SSH-SSH_PERSISTENCE",
+                "rule_name": "ssh suspicious persistence artifact",
+                "reason": "authorized_keys entry uses command= restriction/execution",
+                "preview": 'command="/usr/local/bin/keywrap" ssh-ed25519 AAAA',
+                "tags": ["ssh", "user-persistence"],
+                "scope": "user",
+            },
+        ],
+        metadata={
+            "summary": {
+                "filtered_finding_count": 2,
+                "displayed_finding_count": 2,
+                "saved_finding_count": 2,
+                "module_success_count": 2,
+                "module_count": 2,
+                "module_error_count": 0,
+                "severity_counts": {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 0, "LOW": 0, "INFO": 0},
+            },
+            "output_locations": {"saved": "/tmp/analyze_20260331_120000.txt", "explicit": None},
+        },
+    )
+
+    assert "TENAX PERSISTENCE ANALYSIS" in rendered
+    assert "CRITICAL FINDINGS: 1" in rendered
+    assert "┌" in rendered
+    assert "SYSTEMD (SYSTEM-LEVEL)" in rendered
+    assert "[CRITICAL] SYSTEMD TEMPORARY-PATH EXECUTION" in rendered
+    assert "Exec:" in rendered
+    assert "line 7 -> ExecStart=/tmp/.cache/dbus-update --daemon" in rendered
+    assert "Output saved:" in rendered
