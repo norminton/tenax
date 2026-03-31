@@ -280,6 +280,29 @@ def _analyze_symlink(path: Path) -> dict[str, Any] | None:
 def _analyze_file(path: Path) -> dict[str, Any] | None:
     hits: dict[str, dict[str, Any]] = {}
 
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        return _finalize_finding(path, hits)
+
+    if b"\x00" in raw[:4096]:
+        record_hit(
+            hits,
+            reason="Container-related artifact contains binary content",
+            score=70,
+            preview="[binary content omitted]",
+            category="binary",
+        )
+        return _finalize_finding(path, hits)
+
+    try:
+        content = raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return _finalize_finding(path, hits)
+
+    if not _looks_like_container_artifact(path, content):
+        return None
+
     stat_info = safe_stat(path)
     if stat_info:
         mode = stat_info.st_mode & 0o777
@@ -310,29 +333,6 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
                 preview=f"mode={oct(mode)}",
                 category="permissions",
             )
-
-    try:
-        raw = path.read_bytes()
-    except Exception:
-        return _finalize_finding(path, hits)
-
-    if b"\x00" in raw[:4096]:
-        record_hit(
-            hits,
-            reason="Container-related artifact contains binary content",
-            score=70,
-            preview="[binary content omitted]",
-            category="binary",
-        )
-        return _finalize_finding(path, hits)
-
-    try:
-        content = raw.decode("utf-8", errors="ignore")
-    except Exception:
-        return _finalize_finding(path, hits)
-
-    if not _looks_like_container_artifact(path, content):
-        return None
 
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         stripped = raw_line.strip()
