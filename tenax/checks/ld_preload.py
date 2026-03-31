@@ -214,6 +214,7 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
 
         _detect_ld_preload(hits, stripped, line_number)
         _detect_ld_library_path(hits, stripped, line_number)
+        _detect_direct_shared_object_reference(hits, stripped, line_number)
 
     return _finalize_finding(path, hits)
 
@@ -230,6 +231,13 @@ def _detect_ld_preload(
     value_lower = value.lower()
 
     _analyze_library_path_value(hits, value, value_lower, line, line_number, "LD_PRELOAD")
+    record_hit(
+        hits,
+        reason="LD_PRELOAD forces a shared object into process startup",
+        score=35,
+        preview=with_line_number(line_number, line),
+        category="ld-preload",
+    )
 
 
 def _detect_ld_library_path(
@@ -251,6 +259,37 @@ def _detect_ld_library_path(
             line,
             line_number,
             "LD_LIBRARY_PATH",
+        )
+
+
+def _detect_direct_shared_object_reference(
+    hits: dict[str, dict[str, Any]],
+    line: str,
+    line_number: int,
+) -> None:
+    stripped = line.strip()
+    if not stripped.startswith("/"):
+        return
+
+    matches = SHARED_OBJECT_REGEX.findall(stripped)
+    if not matches:
+        return
+
+    for so_path in matches:
+        record_hit(
+            hits,
+            reason="Dynamic linker configuration directly references a shared object path",
+            score=35,
+            preview=with_line_number(line_number, line),
+            category="direct-so-reference",
+        )
+        _analyze_library_path_value(
+            hits,
+            so_path,
+            so_path.lower(),
+            line,
+            line_number,
+            "linker configuration",
         )
 
 

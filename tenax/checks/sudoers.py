@@ -770,43 +770,39 @@ def _detect_temp_or_user_exec(
     line_lower: str,
     line_number: int,
 ) -> None:
-    if not DIRECT_EXEC_REGEX.search(line):
-        return
+    path_matches = re.findall(r"(/[^\s'\";|,]+)", line)
+    for matched_path in path_matches:
+        matched_lower = matched_path.lower()
 
-    if _contains_high_risk_path(line_lower):
-        if _path_startswith_any(line_lower, TEMP_PATH_PATTERNS):
+        if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):
             _record_hit(
                 hits,
-                reason="sudoers artifact executes content from a temporary path",
+                reason="sudoers artifact delegates execution to a temporary-path command",
                 score=90,
                 preview=_with_line_number(line_number, line),
                 category="temp-exec",
             )
             return
 
-        if USER_PATH_REGEX.search(line):
+        if USER_PATH_REGEX.search(matched_path):
             _record_hit(
                 hits,
-                reason="sudoers artifact executes content from a user-controlled path",
+                reason="sudoers artifact delegates execution to a user-controlled command path",
                 score=85,
                 preview=_with_line_number(line_number, line),
                 category="user-exec",
             )
             return
 
-    if HIDDEN_PATH_REGEX.search(line):
-        _record_hit(
-            hits,
-            reason="sudoers artifact references a hidden executable or payload path",
-            score=80,
-            preview=_with_line_number(line_number, line),
-            category="hidden-exec",
-        )
-        return
-
-    path_matches = re.findall(r"(/[^\s'\";|,]+)", line)
-    for matched_path in path_matches:
-        matched_lower = matched_path.lower()
+        if HIDDEN_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="sudoers artifact references a hidden executable or payload path",
+                score=80,
+                preview=_with_line_number(line_number, line),
+                category="hidden-exec",
+            )
+            return
 
         if SUSPICIOUS_FILE_EXT_REGEX.search(matched_path):
             if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):

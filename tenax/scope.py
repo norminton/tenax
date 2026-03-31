@@ -113,8 +113,6 @@ MODULE_PATH_SPECS: dict[str, dict[str, object]] = {
             "/var/lib/docker/containers",
             "/var/lib/containers",
             "/usr/share/containers",
-            "/etc/systemd/system",
-            "/usr/lib/systemd/system",
         ],
         "user_suffixes": [".config/containers", ".docker"],
     },

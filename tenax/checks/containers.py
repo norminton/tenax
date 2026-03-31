@@ -23,8 +23,6 @@ CONTAINER_PATHS = [
     Path("/var/lib/docker/containers"),
     Path("/var/lib/containers"),
     Path("/usr/share/containers"),
-    Path("/etc/systemd/system"),
-    Path("/usr/lib/systemd/system"),
     Path.home() / ".config/containers",
     Path.home() / ".docker",
 ]
@@ -142,6 +140,10 @@ ENTRYPOINT_CMD_REGEX = re.compile(
 )
 
 CONTAINER_RUNTIME_REGEX = re.compile(r"\b(docker|podman|containerd|nerdctl)\b", re.IGNORECASE)
+CONTAINER_CONFIG_HINT_REGEX = re.compile(
+    r"\b(image|entrypoint|command|volumes?|network_mode|pid|ipc|privileged|docker|podman|containerd|nerdctl)\b",
+    re.IGNORECASE,
+)
 
 _record_hit = record_hit
 _safe_walk = safe_walk
@@ -329,6 +331,9 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     except Exception:
         return _finalize_finding(path, hits)
 
+    if not _looks_like_container_artifact(path, content):
+        return None
+
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         stripped = raw_line.strip()
         if not stripped:
@@ -346,6 +351,19 @@ def _analyze_file(path: Path) -> dict[str, Any] | None:
     _apply_compound_behavior_bonuses(hits)
 
     return _finalize_finding(path, hits)
+
+
+def _looks_like_container_artifact(path: Path, content: str) -> bool:
+    path_lower = str(path).lower()
+    if any(token in path_lower for token in ("/docker", "/containers", "container", ".docker")):
+        return True
+
+    # Avoid double-reporting plain systemd services through the container module
+    # unless the unit actually contains container runtime semantics.
+    if path.suffix in {".service", ".timer", ".socket", ".path"} and "/systemd/" in path_lower:
+        return bool(CONTAINER_CONFIG_HINT_REGEX.search(content))
+
+    return bool(CONTAINER_CONFIG_HINT_REGEX.search(content))
 
 def _detect_privileged_or_host_namespace(
     hits: dict[str, dict[str, Any]],

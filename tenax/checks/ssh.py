@@ -130,13 +130,12 @@ LD_HIJACK_REGEX = re.compile(
 
 AUTHORIZED_KEYS_COMMAND_REGEX = re.compile(
     r"""
-    ^
-    \s*
+    (?:^|,|\s)
     command=
-    (?P<quote>["'])?
+    (?P<quote>["'])
     (?P<value>.*?)
-    (?P=quote)?
-    (?P<rest>,|ssh-|$)
+    (?P=quote)
+    (?=,|\s|$)
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -435,7 +434,9 @@ def _detect_authorized_keys_abuse(
         return
 
 
-    if AUTHORIZED_KEYS_COMMAND_REGEX.search(line):
+    command_match = AUTHORIZED_KEYS_COMMAND_REGEX.search(line)
+    if command_match:
+        command_value = command_match.group("value").strip()
         _record_hit(
             hits,
             reason="authorized_keys entry uses command= restriction/execution",
@@ -444,7 +445,7 @@ def _detect_authorized_keys_abuse(
             category="authorized-keys-command",
         )
 
-        if _contains_high_risk_path(line_lower):
+        if _contains_high_risk_path(command_value.lower()):
             _record_hit(
                 hits,
                 reason="authorized_keys command= references a high-risk path",
@@ -453,7 +454,7 @@ def _detect_authorized_keys_abuse(
                 category="authorized-keys-command-risk-path",
             )
 
-        if HIDDEN_PATH_REGEX.search(line):
+        if HIDDEN_PATH_REGEX.search(command_value):
             _record_hit(
                 hits,
                 reason="authorized_keys command= references a hidden path",

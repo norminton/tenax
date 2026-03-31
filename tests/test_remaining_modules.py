@@ -182,3 +182,24 @@ def test_capabilities_benign_assignment_is_suppressed(monkeypatch: pytest.Monkey
     benign = capabilities._analyze_capability_record(Path("/usr/bin/ping"), "cap_net_bind_service+ep")
 
     assert benign is None
+
+
+def test_ld_preload_detects_raw_shared_object_reference_in_ld_so_preload(tmp_path: Path) -> None:
+    artifact = tmp_path / "ld.so.preload"
+    artifact.write_text("/var/tmp/.cache-sync/libnss-stage.so\n", encoding="utf-8")
+
+    finding = ld_preload._analyze_file(artifact)
+
+    assert finding is not None
+    assert_basic_module_finding(finding, artifact)
+    assert any("shared object path" in reason.lower() or "temporary path" in reason.lower() for reason in finding["reasons"])
+
+
+def test_containers_ignores_plain_systemd_unit_without_container_context(tmp_path: Path) -> None:
+    artifact = tmp_path / "cleanup.service"
+    artifact.write_text(
+        "[Unit]\nDescription=cleanup\n\n[Service]\nExecStart=/usr/local/bin/cleanup-old-downloads\n",
+        encoding="utf-8",
+    )
+
+    assert containers._analyze_file(artifact) is None

@@ -21,3 +21,18 @@ def test_sudoers_fixture_ignores_standard_root_policy(fixture_file_factory) -> N
     artifact = fixture_file_factory("sudoers", "benign.sudoers", target_name="sudoers")
 
     assert sudoers._analyze_file(artifact) is None
+
+
+def test_sudoers_detects_nopasswd_user_controlled_command_without_extension(tmp_path) -> None:
+    artifact = tmp_path / "appsvc"
+    artifact.write_text(
+        "appsvc ALL=(root) NOPASSWD: /home/appsvc/.local/bin/.wrap-login\n",
+        encoding="utf-8",
+    )
+
+    finding = sudoers._analyze_file(artifact)
+
+    assert finding is not None
+    assert_basic_module_finding(finding, artifact)
+    assert any("NOPASSWD" in reason for reason in finding["reasons"])
+    assert any("user-controlled command path" in reason for reason in finding["reasons"])
