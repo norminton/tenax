@@ -128,10 +128,10 @@ def preview_rank(
     *,
     score: int = 0,
     category: str | None = None,
-) -> tuple[int, int, int, int, int]:
+) -> tuple[int, int, int, int, int, int]:
     preview_text = normalize_preview_text(preview)
     if not preview_text:
-        return (0, 0, 0, 0, 0)
+        return (0, 0, 0, 0, 0, 0)
 
     preview_lower = preview_text.lower()
     category_lower = (category or "").lower()
@@ -140,14 +140,13 @@ def preview_rank(
     is_placeholder = 1 if preview_lower in PLACEHOLDER_PREVIEWS else 0
     is_metadata_only = 1 if preview_lower.startswith(METADATA_ONLY_PREFIXES) else 0
     category_is_metadata = 1 if category_lower in {"ownership", "permissions"} else 0
-    concise_bias = max(0, 320 - min(len(preview_text), 320))
-
     return (
         is_line_preview,
         has_behavioral_text,
         0 if (is_metadata_only or category_is_metadata) else 1,
         0 if is_placeholder else 1,
-        score + concise_bias,
+        score,
+        -len(preview_text),
     )
 
 
@@ -226,7 +225,7 @@ def select_investigator_preview(
     fallback: str | None = None,
 ) -> str | None:
     best_preview: str | None = None
-    best_rank: tuple[int, int, int, int, int] | None = None
+    best_rank: tuple[int, int, int, int, int, int] | None = None
 
     for entry in hits.values():
         preview = entry.get("preview")
