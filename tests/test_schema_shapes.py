@@ -121,5 +121,6 @@ def test_render_text_formats_preview_as_wrapped_block() -> None:
         metadata={},
     )
 
-    assert "  preview:" in rendered
-    assert "    line 12: ExecStart=/tmp/.cache/dbus-update" in rendered
+    assert "Exec:" in rendered
+    assert "  line 12 -> ExecStart=/tmp/.cache/dbus-update --daemon" in rendered
+    assert "--with-a-very-long-argument-string-for-wrapping" in rendered
