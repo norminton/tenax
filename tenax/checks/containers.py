@@ -12,6 +12,7 @@ from tenax.checks.common import (
     safe_lstat,
     safe_stat,
     safe_walk,
+    select_investigator_preview,
     severity_from_score,
     with_line_number,
 )
@@ -698,7 +699,6 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         return None
 
     reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
 
@@ -752,7 +752,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else None
+    preview = select_investigator_preview(hits)
 
     return {
         "path": str(path),

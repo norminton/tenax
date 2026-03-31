@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from tenax.checks.common import select_investigator_preview
 from tenax.utils import is_file_safe, path_exists
 
 RC_PATHS = [
@@ -881,7 +882,6 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         return None
 
     reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
 
@@ -923,7 +923,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else None
+    preview = select_investigator_preview(hits)
 
     return {
         "path": str(path),

@@ -5,7 +5,7 @@ import tomllib
 
 from tenax import analyzer, collector
 from tenax.checks import BUILTIN_MODULES
-from tenax.checks.common import finalize_finding, record_hit
+from tenax.checks.common import finalize_finding, record_hit, select_investigator_preview
 from tenax.utils import build_collect_record
 
 
@@ -83,6 +83,22 @@ def test_shared_finalize_finding_supports_strict_and_expanded_modes() -> None:
     )
     assert expanded is not None
     assert expanded["severity"] == "LOW"
+
+
+def test_select_investigator_preview_prefers_behavioral_line_over_metadata() -> None:
+    hits: dict[str, dict[str, object]] = {}
+    record_hit(hits, "owned by user", 95, "owner=alice", "ownership")
+    record_hit(
+        hits,
+        "executes payload from temp path",
+        80,
+        "line 7: ExecStart=/tmp/.cache/dbus-update --daemon",
+        "temp-exec",
+    )
+
+    preview = select_investigator_preview(hits)
+
+    assert preview == "line 7: ExecStart=/tmp/.cache/dbus-update --daemon"
 
 
 def test_shared_collect_record_shapes_metadata(tmp_path: Path) -> None:

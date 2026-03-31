@@ -4,7 +4,15 @@ import re
 from pathlib import Path
 from typing import Any
 
-from tenax.checks.common import build_collect_record, path_startswith_any, record_hit, safe_stat, severity_from_score, with_line_number
+from tenax.checks.common import (
+    build_collect_record,
+    path_startswith_any,
+    record_hit,
+    safe_stat,
+    select_investigator_preview,
+    severity_from_score,
+    with_line_number,
+)
 from tenax.utils import is_file_safe, path_exists
 
 ENVIRONMENT_HOOK_PATHS = [
@@ -590,7 +598,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = next((entry["preview"] for entry in hits.values() if entry.get("preview")), None)
+    preview = select_investigator_preview(hits)
 
     return {
         "path": str(path),

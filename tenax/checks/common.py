@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import pwd
+import re
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,101 @@ def with_line_number_clamped(line_number: int, line: str, *, max_length: int = 2
     return f"L{line_number}: {flattened}"
 
 
+LINE_PREFIX_REGEX = re.compile(r"^(line \d+:|L\d+:)\s*", re.IGNORECASE)
+METADATA_ONLY_PREFIXES = ("owner=", "mode=")
+PLACEHOLDER_PREVIEWS = {"[binary content omitted]"}
+BEHAVIORAL_PREVIEW_TOKENS = (
+    "execstart=",
+    "exec=",
+    "command=",
+    "authorizedkeyscommand",
+    "ld_preload",
+    "ld_library_path",
+    "path=",
+    "curl",
+    "wget",
+    "fetch",
+    "bash -c",
+    "python -c",
+    "perl -e",
+    "base64",
+    "socket",
+    "connect(",
+    "nopasswd",
+    "/tmp/",
+    "/var/tmp/",
+    "/dev/shm/",
+    "/run/shm/",
+    "/home/",
+    "/root/",
+)
+
+
+def normalize_preview_text(preview: str | None) -> str | None:
+    if preview is None:
+        return None
+    flattened = " ".join(str(preview).split()).strip()
+    return flattened or None
+
+
+def preview_rank(
+    preview: str | None,
+    *,
+    score: int = 0,
+    category: str | None = None,
+) -> tuple[int, int, int, int, int]:
+    preview_text = normalize_preview_text(preview)
+    if not preview_text:
+        return (0, 0, 0, 0, 0)
+
+    preview_lower = preview_text.lower()
+    category_lower = (category or "").lower()
+    is_line_preview = 1 if LINE_PREFIX_REGEX.match(preview_text) else 0
+    has_behavioral_text = 1 if any(token in preview_lower for token in BEHAVIORAL_PREVIEW_TOKENS) else 0
+    is_placeholder = 1 if preview_lower in PLACEHOLDER_PREVIEWS else 0
+    is_metadata_only = 1 if preview_lower.startswith(METADATA_ONLY_PREFIXES) else 0
+    category_is_metadata = 1 if category_lower in {"ownership", "permissions"} else 0
+    concise_bias = max(0, 320 - min(len(preview_text), 320))
+
+    return (
+        is_line_preview,
+        has_behavioral_text,
+        0 if (is_metadata_only or category_is_metadata) else 1,
+        0 if is_placeholder else 1,
+        score + concise_bias,
+    )
+
+
+def choose_preferred_preview(
+    current_preview: str | None,
+    candidate_preview: str | None,
+    *,
+    current_score: int = 0,
+    candidate_score: int = 0,
+    current_category: str | None = None,
+    candidate_category: str | None = None,
+) -> str | None:
+    current_text = normalize_preview_text(current_preview)
+    candidate_text = normalize_preview_text(candidate_preview)
+
+    if not current_text:
+        return candidate_text
+    if not candidate_text:
+        return current_text
+
+    current_rank = preview_rank(
+        current_text,
+        score=current_score,
+        category=current_category,
+    )
+    candidate_rank = preview_rank(
+        candidate_text,
+        score=candidate_score,
+        category=candidate_category,
+    )
+    return candidate_text if candidate_rank > current_rank else current_text
+
+
 def record_hit(
     hits: dict[str, dict[str, Any]],
     reason: str,
@@ -124,29 +220,35 @@ def sha256_file(path: Path) -> str | None:
         return None
 
 
-def _select_investigator_preview(hits: dict[str, dict[str, Any]]) -> str | None:
+def select_investigator_preview(
+    hits: dict[str, dict[str, Any]],
+    *,
+    fallback: str | None = None,
+) -> str | None:
     best_preview: str | None = None
-    best_rank: tuple[int, int, int] | None = None
+    best_rank: tuple[int, int, int, int, int] | None = None
 
     for entry in hits.values():
         preview = entry.get("preview")
         if not preview:
             continue
 
-        preview_text = str(preview)
-        score = int(entry.get("score", 0))
-        category = str(entry.get("category", ""))
-        rank = (
-            1 if preview_text.lower().startswith("line ") else 0,
-            0 if category in {"ownership", "permissions"} else 1,
-            score,
+        preview_text = normalize_preview_text(str(preview))
+        if not preview_text:
+            continue
+        rank = preview_rank(
+            preview_text,
+            score=int(entry.get("score", 0)),
+            category=str(entry.get("category", "")),
         )
 
         if best_rank is None or rank > best_rank:
             best_rank = rank
             best_preview = preview_text
 
-    return best_preview
+    if best_preview:
+        return best_preview
+    return normalize_preview_text(fallback)
 
 
 def finalize_finding(
@@ -197,7 +299,7 @@ def finalize_finding(
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = _select_investigator_preview(hits)
+    preview = select_investigator_preview(hits)
 
     return {
         "path": str(path),

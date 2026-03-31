@@ -9,6 +9,7 @@ from typing import Any, Callable
 import re
 
 from tenax.checks import ANALYZE_SOURCES, BUILTIN_MODULES
+from tenax.checks.common import choose_preferred_preview, normalize_preview_text
 from tenax.module_interface import apply_scoring_profile, determine_environment_label
 from tenax.reporter import output_results
 from tenax.scope import apply_module_scope, build_scan_scope, normalize_path_string
@@ -182,6 +183,64 @@ def _ensure_list_of_strings(value: Any) -> list[str]:
     return [cleaned] if cleaned else []
 
 
+def _focus_preview_index(text: str) -> int:
+    preview_lower = text.lower()
+    focus_tokens = (
+        "execstart=",
+        "exec=",
+        "command=",
+        "authorizedkeyscommand",
+        "ld_preload",
+        "ld_library_path",
+        "path=",
+        "curl",
+        "wget",
+        "fetch",
+        "bash -c",
+        "python -c",
+        "perl -e",
+        "base64",
+        "socket",
+        "connect(",
+        "nopasswd",
+        "/tmp/",
+        "/var/tmp/",
+        "/dev/shm/",
+        "/run/shm/",
+        "/home/",
+        "/root/",
+    )
+    indexes = [preview_lower.find(token) for token in focus_tokens if token in preview_lower]
+    return min(indexes) if indexes else len(text) // 2
+
+
+def _trim_preview_text(preview: str | None, *, max_length: int = 220) -> str | None:
+    preview_text = normalize_preview_text(preview)
+    if not preview_text:
+        return None
+    if len(preview_text) <= max_length:
+        return preview_text
+
+    prefix_match = re.match(r"^(line \d+:|L\d+:)\s*", preview_text, re.IGNORECASE)
+    prefix = prefix_match.group(0) if prefix_match else ""
+    body = preview_text[len(prefix) :]
+    budget = max(max_length - len(prefix), 40)
+    if len(body) <= budget:
+        return f"{prefix}{body}"
+
+    focus_index = _focus_preview_index(body)
+    half_window = max((budget - 3) // 2, 18)
+    start = max(0, focus_index - half_window)
+    end = min(len(body), start + budget - 3)
+    start = max(0, end - (budget - 3))
+    snippet = body[start:end].strip()
+    if start > 0:
+        snippet = f"...{snippet}"
+    if end < len(body):
+        snippet = f"{snippet}..."
+    return f"{prefix}{snippet}"
+
+
 def _pick_primary_source(sources: list[str]) -> str:
     if not sources:
         return "unknown"
@@ -338,7 +397,7 @@ def _enrich_result(source: str, item: dict[str, Any], *, scope_context=None) -> 
     score = apply_scoring_profile(_coerce_score(enriched.get("score", 0)), module, environment=environment)
     severity = _normalize_severity(enriched.get("severity"), score)
     reason = str(enriched.get("reason", "") or "").strip() or "No reason provided"
-    preview = str(enriched.get("preview", "") or "").strip()
+    preview = _trim_preview_text(enriched.get("preview"))
     tags = sorted(
         set(_ensure_list_of_strings(enriched.get("tags")))
         | set(_derive_tags(source=source, path_value=target_path, reason=reason, preview=preview))
@@ -387,7 +446,7 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         source = str(item.get("source", "unknown"))
         item_reason = str(item.get("reason", "No reason provided"))
         item_reasons = _ensure_list_of_strings(item.get("reasons")) or [item_reason]
-        preview = str(item.get("preview", ""))
+        preview = normalize_preview_text(item.get("preview")) or ""
 
         rule_context = str(item.get("rule_id") or source)
 
@@ -447,13 +506,21 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             current["rule_id"] = item.get("rule_id")
             current["rule_name"] = item.get("rule_name")
             current["finding_key"] = item.get("finding_key")
-            if item.get("preview"):
-                current["preview"] = item["preview"]
+            current["preview"] = choose_preferred_preview(
+                current.get("preview"),
+                item.get("preview"),
+                current_score=_coerce_score(current.get("score", 0)),
+                candidate_score=_coerce_score(item.get("score", 0)),
+            )
             if item.get("path"):
                 current["path"] = item["path"]
 
-        if not current.get("preview") and item.get("preview"):
-            current["preview"] = item["preview"]
+        current["preview"] = choose_preferred_preview(
+            current.get("preview"),
+            item.get("preview"),
+            current_score=_coerce_score(current.get("score", 0)),
+            candidate_score=_coerce_score(item.get("score", 0)),
+        )
 
     consolidated: list[dict[str, Any]] = []
 

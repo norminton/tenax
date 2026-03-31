@@ -4,7 +4,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-from tenax.checks.common import build_collect_record, owner_from_uid, safe_lstat, safe_stat, safe_walk
+from tenax.checks.common import (
+    build_collect_record,
+    owner_from_uid,
+    safe_lstat,
+    safe_stat,
+    safe_walk,
+    select_investigator_preview,
+)
 from tenax.utils import is_file_safe, path_exists
 
 DEFAULT_PATH = "/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin"
@@ -719,7 +726,7 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
 
     score = sum(entry["score"] for entry in hits.values())
     reasons = [entry["reason"] for entry in hits.values()]
-    preview = next((entry["preview"] for entry in hits.values() if entry.get("preview")), None)
+    preview = select_investigator_preview(hits)
 
     return {
         "path": str(path),

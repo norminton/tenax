@@ -136,14 +136,16 @@ TX-SYSTEMD-8A15F2C1 CRITICAL systemd /etc/systemd/system/dbus-update.service
   score=115 rule=TX-RULE-SYSTEMD-SERVICE_DEFINITION
   reason=systemd service executes payload from a temporary path
   tags=root-execution, scheduled-start, service-definition, system-scope, systemd, systemd-unit, temp-path
-  preview=ExecStart=/tmp/.cache/dbus-update --daemon
+  preview:
+    line 7: ExecStart=/tmp/.cache/dbus-update --daemon
 
 HIGH (1)
 TX-SSH-4A32A7E0 HIGH ssh /root/.ssh/authorized_keys
   score=74 rule=TX-RULE-SSH-SSH_PERSISTENCE
   reason=authorized_keys entry uses command= restriction/execution
   tags=credential-surface, ssh, ssh-persistence, user-persistence, user-scope
-  preview=command="/usr/local/bin/keywrap" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+  preview:
+    command="/usr/local/bin/keywrap" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
 ```
 
 ## Example Collect Output

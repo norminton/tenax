@@ -9,6 +9,7 @@ from tenax.checks.common import (
     owner_from_uid,
     record_hit,
     safe_stat,
+    select_investigator_preview,
     severity_from_score,
     with_line_number,
 )
@@ -246,7 +247,6 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         return None
 
     reasons = [v["reason"] for v in hits.values()]
-    previews = [v["preview"] for v in hits.values() if v.get("preview")]
     categories = {v["category"] for v in hits.values()}
     score = sum(v["score"] for v in hits.values())
 
@@ -269,5 +269,5 @@ def _finalize_finding(path: Path, hits: dict[str, dict[str, Any]]) -> dict[str, 
         "severity": severity_from_score(score),
         "reason": primary_reason,
         "reasons": reasons,
-        "preview": previews[0] if previews else None,
+        "preview": select_investigator_preview(hits),
     }

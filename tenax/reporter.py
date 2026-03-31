@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import textwrap
 from collections import defaultdict
 from typing import Any
 
@@ -156,8 +157,21 @@ def _render_analyze_finding(item: dict[str, Any]) -> list[str]:
     if tags:
         lines.append(f"  tags={', '.join(tags)}")
     if item.get("preview"):
-        lines.append(f"  preview={item['preview']}")
+        lines.append("  preview:")
+        lines.extend(_render_preview_block(str(item["preview"])))
     return lines
+
+
+def _render_preview_block(preview: str, *, width: int = 96) -> list[str]:
+    wrapped = textwrap.wrap(
+        preview,
+        width=width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    if not wrapped:
+        return ["    [empty preview]"]
+    return [f"    {line}" for line in wrapped]
 
 
 def _render_collect_text(results: list[dict[str, Any]], metadata: dict[str, Any]) -> str:

@@ -12,6 +12,7 @@ from tenax.checks.common import (
     path_startswith_any,
     record_hit,
     safe_stat,
+    select_investigator_preview,
     severity_from_score,
 )
 from tenax.utils import path_exists
@@ -378,7 +379,6 @@ def _finalize_finding(
         return None
 
     reasons = [entry["reason"] for entry in hits.values()]
-    previews = [entry["preview"] for entry in hits.values() if entry.get("preview")]
     categories = {entry["category"] for entry in hits.values()}
     score = sum(int(entry["score"]) for entry in hits.values())
 
@@ -404,7 +404,7 @@ def _finalize_finding(
         key=lambda entry: int(entry["score"]),
     )["reason"]
 
-    preview = previews[0] if previews else f"{path_obj} = {capabilities_text}"
+    preview = select_investigator_preview(hits, fallback=f"{path_obj} = {capabilities_text}")
 
     return {
         "path": str(path_obj),

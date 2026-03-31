@@ -101,3 +101,25 @@ def test_run_analysis_assigns_stable_required_fields(monkeypatch: pytest.MonkeyP
     assert finding["source_module"] == "sudoers"
     assert finding["evidence"]["paths"] == ["/tmp/sudoers"]
     assert finding["rationale"]["summary"] == "sudoers grants NOPASSWD: ALL"
+
+
+def test_render_text_formats_preview_as_wrapped_block() -> None:
+    rendered = reporter.render_text(
+        "analyze",
+        [
+            {
+                "finding_id": "TX-SYSTEMD-ABC12345",
+                "severity": "HIGH",
+                "source": "systemd",
+                "path": "/etc/systemd/system/demo.service",
+                "score": 95,
+                "rule_id": "TX-RULE-SYSTEMD-TEMP_PATH",
+                "reason": "Systemd unit executes from a temporary path",
+                "preview": "line 12: ExecStart=/tmp/.cache/dbus-update --daemon --with-a-very-long-argument-string-for-wrapping",
+            }
+        ],
+        metadata={},
+    )
+
+    assert "  preview:" in rendered
+    assert "    line 12: ExecStart=/tmp/.cache/dbus-update" in rendered

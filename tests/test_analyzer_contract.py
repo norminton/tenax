@@ -410,6 +410,38 @@ def test_run_analysis_merges_overlapping_shell_and_environment_hits_on_same_path
     assert payload["results"][0]["dedupe"]["merged_count"] == 2
 
 
+def test_run_analysis_prefers_behavioral_preview_over_stronger_metadata_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        analyzer,
+        "ANALYZE_SOURCES",
+        {
+            "systemd": lambda: [
+                _finding(
+                    "/etc/systemd/system/demo.service",
+                    score=100,
+                    reason="unit is world-writable",
+                    preview="mode=0o777",
+                    tags=["service-definition", "writable"],
+                ),
+                _finding(
+                    "/etc/systemd/system/demo.service",
+                    score=80,
+                    reason="unit executes payload from temp path",
+                    preview="line 12: ExecStart=/tmp/payload --daemon",
+                    tags=["service-definition", "temp-path"],
+                ),
+            ],
+        },
+    )
+    monkeypatch.setattr(analyzer, "output_results", lambda **kwargs: None)
+
+    payload = analyzer.run_analysis(output_format="json", sources=["systemd"], top=10)
+
+    assert payload["results"][0]["preview"] == "line 12: ExecStart=/tmp/payload --daemon"
+
+
 def test_derive_tags_does_not_label_sync_path_as_network_retrieval() -> None:
     tags = analyzer._derive_tags(
         source="shell_profiles",
