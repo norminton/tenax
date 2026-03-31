@@ -188,6 +188,10 @@ def _pick_primary_source(sources: list[str]) -> str:
     return max(sorted(set(sources)), key=lambda source: SOURCE_PRIORITY.get(source, 0))
 
 
+def _module_tag_for_source(source: str) -> str:
+    return source.replace("_", "-")
+
+
 def _pick_strongest_severity(severities: list[str]) -> str:
     if not severities:
         return "INFO"
@@ -461,6 +465,13 @@ def _merge_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         raw_scores = [_coerce_score(value) for value in item.get("raw_scores", [])]
 
         primary_source = _pick_primary_source(sources)
+        primary_source_tag = _module_tag_for_source(primary_source)
+        if set(sources).issubset(OVERLAPPING_FINDING_SOURCES):
+            tags = sorted(
+                tag
+                for tag in tags
+                if tag == primary_source_tag or tag not in {_module_tag_for_source(source) for source in sources}
+            )
         strongest_severity = _pick_strongest_severity(severities)
         max_score = max(raw_scores) if raw_scores else _coerce_score(item.get("score", 0))
         normalized_path = item.get("normalized_path")

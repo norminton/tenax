@@ -132,9 +132,11 @@ AUTHORIZED_KEYS_COMMAND_REGEX = re.compile(
     r"""
     (?:^|,|\s)
     command=
-    (?P<quote>["'])
-    (?P<value>.*?)
-    (?P=quote)
+    (?:
+        "(?P<double>[^"]+)" |
+        '(?P<single>[^']+)' |
+        (?P<bare>[^,\s]+)
+    )
     (?=,|\s|$)
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -436,7 +438,14 @@ def _detect_authorized_keys_abuse(
 
     command_match = AUTHORIZED_KEYS_COMMAND_REGEX.search(line)
     if command_match:
-        command_value = command_match.group("value").strip()
+        command_value = next(
+            (
+                value.strip()
+                for value in command_match.group("double", "single", "bare")
+                if value and value.strip()
+            ),
+            "",
+        )
         _record_hit(
             hits,
             reason="authorized_keys entry uses command= restriction/execution",
@@ -445,23 +454,7 @@ def _detect_authorized_keys_abuse(
             category="authorized-keys-command",
         )
 
-        if _contains_high_risk_path(command_value.lower()):
-            _record_hit(
-                hits,
-                reason="authorized_keys command= references a high-risk path",
-                score=95,
-                preview=_with_line_number(line_number, line),
-                category="authorized-keys-command-risk-path",
-            )
-
-        if HIDDEN_PATH_REGEX.search(command_value):
-            _record_hit(
-                hits,
-                reason="authorized_keys command= references a hidden path",
-                score=85,
-                preview=_with_line_number(line_number, line),
-                category="authorized-keys-command-hidden",
-            )
+        _record_authorized_keys_command_path_risk(hits, command_value, line, line_number)
 
 
     if AUTHORIZED_KEYS_ENV_REGEX.search(line):
@@ -587,6 +580,69 @@ def _detect_ssh_config_exec_abuse(
             score=50,
             preview=_with_line_number(line_number, line),
             category="ssh-config-forcecommand",
+        )
+
+
+def _record_authorized_keys_command_path_risk(
+    hits: dict[str, dict[str, Any]],
+    command_value: str,
+    line: str,
+    line_number: int,
+) -> None:
+    if not command_value:
+        return
+
+    matched_any = False
+    for matched_path in re.findall(r"(/[^\s'\";|,]+)", command_value):
+        matched_any = True
+        matched_lower = matched_path.lower()
+
+        if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):
+            _record_hit(
+                hits,
+                reason="authorized_keys command= references a temporary path",
+                score=95,
+                preview=_with_line_number(line_number, line),
+                category="authorized-keys-command-risk-path",
+            )
+            return
+
+        if USER_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="authorized_keys command= references a user-controlled path",
+                score=95,
+                preview=_with_line_number(line_number, line),
+                category="authorized-keys-command-risk-path",
+            )
+            return
+
+        if HIDDEN_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="authorized_keys command= references a hidden path",
+                score=85,
+                preview=_with_line_number(line_number, line),
+                category="authorized-keys-command-hidden",
+            )
+            return
+
+    if not matched_any and _contains_high_risk_path(command_value.lower()):
+        _record_hit(
+            hits,
+            reason="authorized_keys command= references a high-risk path",
+            score=95,
+            preview=_with_line_number(line_number, line),
+            category="authorized-keys-command-risk-path",
+        )
+
+    if HIDDEN_PATH_REGEX.search(command_value):
+        _record_hit(
+            hits,
+            reason="authorized_keys command= references a hidden path",
+            score=85,
+            preview=_with_line_number(line_number, line),
+            category="authorized-keys-command-hidden",
         )
 
 

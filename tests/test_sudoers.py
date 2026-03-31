@@ -36,3 +36,17 @@ def test_sudoers_detects_nopasswd_user_controlled_command_without_extension(tmp_
     assert_basic_module_finding(finding, artifact)
     assert any("NOPASSWD" in reason for reason in finding["reasons"])
     assert any("user-controlled command path" in reason for reason in finding["reasons"])
+
+
+def test_sudoers_detects_delegated_command_list_with_interpreter_and_user_payload(tmp_path) -> None:
+    artifact = tmp_path / "db-session"
+    artifact.write_text(
+        "dbadmin ALL=(root) NOPASSWD: /usr/bin/python3 /home/dbadmin/.local/share/.session-helper\n",
+        encoding="utf-8",
+    )
+
+    finding = sudoers._analyze_file(artifact)
+
+    assert finding is not None
+    assert_basic_module_finding(finding, artifact)
+    assert any("delegated command list" in reason.lower() or "user-controlled command path" in reason.lower() for reason in finding["reasons"])

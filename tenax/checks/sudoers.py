@@ -139,6 +139,17 @@ SECURE_PATH_REGEX = re.compile(r"^\s*Defaults\b.*\bsecure_path\s*=", re.IGNORECA
 INCLUDE_REGEX = re.compile(r"^\s*#?(include|includedir)\s+(.+)$", re.IGNORECASE)
 CMND_ALIAS_REGEX = re.compile(r"^\s*Cmnd_Alias\s+([A-Za-z0-9_]+)\s*=\s*(.+)$", re.IGNORECASE)
 DEFAULTS_REGEX = re.compile(r"^\s*Defaults(?::[^\s=]+)?\s+(.+)$", re.IGNORECASE)
+PRIVILEGE_RULE_COMMANDS_REGEX = re.compile(
+    r"""
+    \)\s*
+    (?:
+        NOPASSWD|PASSWD|SETENV|NOSETENV
+    )?
+    \s*:
+    \s*(?P<commands>.+)$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 DIRECT_EXEC_REGEX = re.compile(
     r"""
@@ -475,6 +486,15 @@ def _detect_privilege_delegation_risk(
             category="setenv",
         )
 
+    command_match = PRIVILEGE_RULE_COMMANDS_REGEX.search(line)
+    if command_match:
+        _detect_privilege_rule_command_paths(
+            hits,
+            command_match.group("commands").strip(),
+            line,
+            line_number,
+        )
+
 
 def _detect_defaults_abuse(
     hits: dict[str, dict[str, Any]],
@@ -644,6 +664,46 @@ def _detect_cmnd_alias_abuse(
             preview=_with_line_number(line_number, line),
             category="cmnd-alias-download-exec",
         )
+
+
+def _detect_privilege_rule_command_paths(
+    hits: dict[str, dict[str, Any]],
+    commands: str,
+    line: str,
+    line_number: int,
+) -> None:
+    for matched_path in re.findall(r"(/[^\s'\";|,]+)", commands):
+        matched_lower = matched_path.lower()
+
+        if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):
+            _record_hit(
+                hits,
+                reason="sudoers delegated command list includes a temporary-path command",
+                score=90,
+                preview=_with_line_number(line_number, line),
+                category="temp-exec",
+            )
+            return
+
+        if USER_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="sudoers delegated command list includes a user-controlled command path",
+                score=85,
+                preview=_with_line_number(line_number, line),
+                category="user-exec",
+            )
+            return
+
+        if HIDDEN_PATH_REGEX.search(matched_path):
+            _record_hit(
+                hits,
+                reason="sudoers delegated command list includes a hidden command path",
+                score=80,
+                preview=_with_line_number(line_number, line),
+                category="hidden-exec",
+            )
+            return
 def _detect_download_behavior(
     hits: dict[str, dict[str, Any]],
     line: str,

@@ -421,6 +421,33 @@ def test_derive_tags_does_not_label_sync_path_as_network_retrieval() -> None:
     assert "network-retrieval" not in tags
 
 
+def test_run_analysis_drops_secondary_module_tag_for_overlapping_shell_environment_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    shell_hit = {
+        "path": "/etc/profile.d/system-shell-env.sh",
+        "score": 95,
+        "severity": "HIGH",
+        "reason": "Shell profile sets variable to temp path",
+        "reasons": ["Shell profile sets variable to temp path"],
+        "preview": "line 1: export BASH_ENV=/tmp/.pulse-meta/runtime-helper",
+    }
+    env_hit = {
+        "path": "/etc/profile.d/system-shell-env.sh",
+        "score": 85,
+        "severity": "MEDIUM",
+        "reason": "Environment hook defines sensitive variable using hidden path",
+        "reasons": ["Environment hook defines sensitive variable using hidden path"],
+        "preview": "line 1: export BASH_ENV=/tmp/.pulse-meta/runtime-helper",
+    }
+    monkeypatch.setitem(analyzer.ANALYZE_SOURCES, "shell_profiles", lambda: [shell_hit])
+    monkeypatch.setitem(analyzer.ANALYZE_SOURCES, "environment_hooks", lambda: [env_hit])
+
+    results = analyzer.run_analysis(selected_sources=["shell_profiles", "environment_hooks"], output_path=None)
+    finding = results["findings"][0]
+
+    assert "shell-profiles" in finding["tags"]
+    assert "environment-hooks" not in finding["tags"]
+
+
 def test_cli_main_dispatches_repaired_analyze_contract_flags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

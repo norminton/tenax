@@ -36,3 +36,19 @@ def test_ssh_detects_valid_authorized_keys_command_option_with_user_path(tmp_pat
     assert_basic_module_finding(finding, artifact)
     assert any("command=" in reason for reason in finding["reasons"])
     assert any("high-risk path" in reason.lower() for reason in finding["reasons"])
+
+
+def test_ssh_detects_command_only_authorized_keys_option_line_from_corpus_style(tmp_path) -> None:
+    artifact = tmp_path / "authorized_keys"
+    artifact.write_text(
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPersist analyst@tenax-lab\n"
+        'command="/home/analyst/.cache/.profile-hook",no-agent-forwarding,no-port-forwarding '
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPersist2 analyst-admin@tenax-lab\n",
+        encoding="utf-8",
+    )
+
+    finding = ssh._analyze_file(artifact)
+
+    assert finding is not None
+    assert_basic_module_finding(finding, artifact)
+    assert any("user-controlled path" in reason.lower() for reason in finding["reasons"])
