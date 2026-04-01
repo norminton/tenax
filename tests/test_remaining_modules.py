@@ -222,6 +222,17 @@ def test_rc_init_detects_direct_user_controlled_payload_path_without_wrapper(tmp
     assert any("user-controlled" in reason.lower() for reason in finding["reasons"])
 
 
+def test_rc_init_ignores_temp_directory_variable_assignment_without_execution(tmp_path: Path) -> None:
+    artifact = tmp_path / "x11-common"
+    artifact.write_text(
+        "#!/bin/sh\n"
+        "DIR=\"/tmp/$1\"\n",
+        encoding="utf-8",
+    )
+
+    assert rc_init._analyze_file(artifact) is None
+
+
 def test_environment_hooks_detects_direct_user_controlled_exec_without_temp_path(tmp_path: Path) -> None:
     artifact = tmp_path / "site-hook.sh"
     artifact.write_text(

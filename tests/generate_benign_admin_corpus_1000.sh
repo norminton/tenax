@@ -184,6 +184,7 @@ done
 for persona in "${PERSONAS[@]}"; do
   mkdir -p \
     "$ROOT_PREFIX/home/$persona/.config/systemd/user" \
+    "$ROOT_PREFIX/home/$persona/.config/environment.d" \
     "$ROOT_PREFIX/home/$persona/.config/autostart" \
     "$ROOT_PREFIX/home/$persona/.local/bin" \
     "$ROOT_PREFIX/home/$persona/.cache" \
@@ -284,21 +285,13 @@ done
 
 for i in $(seq 1 500); do
   persona="$(pick PERSONAS "$((i + 3))")"
-  task="$(pick TASKS "$((i + 5))")"
-  area="$(pick AREAS "$((i + 7))")"
-  calendar="$(pick ON_CALENDARS "$((i + 1))")"
-  mkfile user-timer "$ROOT_PREFIX/home/$persona/.config/systemd/user/$(slug "$task")-$(slug "$area")-$i.timer" 0644 "benign user timer for $persona" <<EOF
-[Unit]
-Description=$persona $task $area timer $i
-
-[Timer]
-OnCalendar=$calendar
-Persistent=true
-RandomizedDelaySec=10m
-Unit=$(slug "$task")-$(slug "$area")-$i.service
-
-[Install]
-WantedBy=timers.target
+  team="$(pick TEAMS "$((i + 5))")"
+  env_name="$(pick ENV_NAMES "$((i + 1))")"
+  env_val="$(pick ENV_VALS "$((i + 7))")"
+  area="$(pick AREAS "$((i + 9))")"
+  mkfile user-environment "$ROOT_PREFIX/home/$persona/.config/environment.d/$(slug "$team")-session-$i.conf" 0644 "benign user environment defaults for $persona" <<EOF
+# user session defaults for $persona
+$env_name=${env_val}-${area}
 EOF
 done
 

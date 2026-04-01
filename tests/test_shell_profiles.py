@@ -16,6 +16,7 @@ def test_shell_profiles_ignores_benign_profile_d_admin_logic(tmp_path) -> None:
 def test_shell_profiles_ignores_benign_xsession_probe_logic(tmp_path) -> None:
     artifact = tmp_path / "im-config_wayland.sh"
     artifact.write_text(
+        ". /etc/X11/Xsession.d/70im-config_launch\n"
         "if [ -r /etc/X11/Xsession.d/70im-config_launch ]; then\n"
         "    export XMODIFIERS=@im=ibus\n"
         "fi\n",
@@ -49,3 +50,13 @@ def test_shell_profiles_detects_direct_user_profile_source_hook(tmp_path) -> Non
 
     assert finding is not None
     assert any("user-controlled path" in reason.lower() for reason in finding["reasons"])
+
+
+def test_shell_profiles_does_not_treat_launch_substring_as_netcat_indicator(tmp_path) -> None:
+    artifact = tmp_path / "im-config_wayland.sh"
+    artifact.write_text(
+        ". /etc/X11/Xsession.d/70im-config_launch\n",
+        encoding="utf-8",
+    )
+
+    assert shell_profiles._analyze_file(artifact) is None

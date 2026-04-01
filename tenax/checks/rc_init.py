@@ -204,6 +204,23 @@ DIRECT_EXEC_ASSIGNMENT_REGEX = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+DIRECT_RISK_PATH_EXEC_REGEX = re.compile(
+    r"""
+    (?:
+        ^ |
+        [;&|()] |
+        \b(?:then|do|else|elif)\b
+    )
+    \s*
+    (
+        /tmp/|/var/tmp/|/dev/shm/|/run/shm/|
+        /home/[^/\s]+/|/root/\.
+    )
+    [^'" \t;|)]*
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 
 def analyze_rc_init_locations() -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
@@ -550,11 +567,11 @@ def _detect_temp_or_user_exec(
     line_lower: str,
     line_number: int,
 ) -> None:
-    path_matches = re.findall(r"(/[^\s'\";|]+)", line)
-    for matched_path in path_matches:
-        matched_lower = matched_path.lower()
+    direct_exec_match = DIRECT_RISK_PATH_EXEC_REGEX.search(line)
+    if direct_exec_match:
+        matched_path = direct_exec_match.group(1)
 
-        if _path_startswith_any(matched_lower, TEMP_PATH_PATTERNS):
+        if _path_startswith_any(matched_path.lower(), TEMP_PATH_PATTERNS):
             _record_hit(
                 hits,
                 reason="Init artifact directly references a temporary-path executable or payload",

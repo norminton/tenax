@@ -177,6 +177,11 @@ COMMON_HARMLESS_EXPORTS = (
     "histfilesize=",
 )
 
+SUSPICIOUS_EXEC_TOKEN_REGEX = re.compile(
+    r"\b(curl|wget|fetch|ftpget|tftp|lwp-download|busybox\s+wget|nc|ncat|netcat)\b|\bbash\s+-c\b",
+    re.IGNORECASE,
+)
+
 
 def analyze_shell_profile_locations() -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
@@ -396,10 +401,7 @@ def _detect_exec_behavior(
             )
             return
 
-    if any(x in line_lower for x in [
-        "/tmp/", "/dev/shm/",
-        "curl", "wget", "nc", "bash -c"
-    ]):
+    if _line_has_suspicious_exec_indicators(line, line_lower):
         _record_hit(
             hits,
             reason="Shell profile executes suspicious command",
@@ -454,10 +456,7 @@ def _detect_prompt_or_trap_abuse(
     line_number: int,
 ) -> None:
     if PROMPT_COMMAND_REGEX.search(line):
-        if any(x in line_lower for x in [
-            "/tmp/", "/dev/shm/",
-            "curl", "wget", "nc"
-        ]):
+        if _line_has_suspicious_exec_indicators(line, line_lower):
             _record_hit(
                 hits,
                 reason="Shell profile uses PROMPT_COMMAND with suspicious behavior",
@@ -467,10 +466,7 @@ def _detect_prompt_or_trap_abuse(
             )
 
     if TRAP_DEBUG_REGEX.search(line):
-        if any(x in line_lower for x in [
-            "/tmp/", "/dev/shm/",
-            "curl", "wget", "nc"
-        ]):
+        if _line_has_suspicious_exec_indicators(line, line_lower):
             _record_hit(
                 hits,
                 reason="Shell profile defines trap with suspicious behavior",
@@ -489,10 +485,7 @@ def _detect_alias_hijack(
     if not ALIASED_SYSTEM_BINARY_REGEX.match(line):
         return
 
-    if any(x in line_lower for x in [
-        "/tmp/", "/dev/shm/",
-        "curl", "wget", "nc"
-    ]):
+    if _line_has_suspicious_exec_indicators(line, line_lower):
         _record_hit(
             hits,
             reason="Shell profile aliases system binary to suspicious command",
@@ -846,6 +839,12 @@ def _with_line_number(line_number: int, line: str) -> str:
 
 def _looks_like_exec_line(line: str) -> bool:
     return bool(DIRECT_EXEC_REGEX.search(line) or DOT_SOURCE_REGEX.search(line))
+
+
+def _line_has_suspicious_exec_indicators(line: str, line_lower: str) -> bool:
+    if "/tmp/" in line_lower or "/dev/shm/" in line_lower:
+        return True
+    return bool(SUSPICIOUS_EXEC_TOKEN_REGEX.search(line))
 
 
 def _is_harmless_export(line: str, line_lower: str) -> bool:

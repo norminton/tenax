@@ -104,8 +104,8 @@ Purpose:
 
 - Run the built-in analyzer modules.
 - Normalize, score, deduplicate, sort, and filter findings.
-- Show a terminal slice of the result set.
-- Save the full filtered result set to disk every run.
+- Show a terminal display slice of the filtered result set.
+- Save the full filtered result set to disk on every run.
 
 Basic syntax:
 
@@ -164,39 +164,42 @@ Display and runtime options:
 
 ### Analyze Behavior Notes
 
-- `analyze` always saves the full filtered result set, even when `--top` limits the terminal display.
-- With `--top`, terminal output is truncated, but the saved artifact still contains all filtered findings.
-- If `--output` points to a file, Tenax writes an extra copy to that exact file.
-- If `--output` points to a directory, Tenax writes an extra timestamped file inside that directory.
-- Even when `--output` is used, Tenax still writes the default timestamped artifact under `output/`.
-- Text output groups findings by severity.
+- `analyze` always writes a timestamped artifact under the repo `output/` directory, such as `output/analyze_20260401_101530.txt`.
+- `--top` only limits what is shown in the terminal. The saved analyze artifact still contains the full filtered finding set.
+- If `--output` points to a file, Tenax writes an additional copy to that exact file.
+- If `--output` points to a directory that already exists, Tenax writes an additional timestamped file inside that directory.
+- Text output starts with a summary block, then groups findings by severity and then by module.
+- Each finding shows a title, finding ID, file path, score, rule ID, reason, optional preview block, and tags.
+- Preview text is labeled as `Exec:` for `line N: ...`, `ExecStart=...`, `Exec=...`, and `command=...` previews. Other previews are labeled as `Evidence:`.
+- In text mode, the footer uses `Output saved:` and prints the default saved path plus any additional explicit output path.
 - JSON output includes:
   - `mode`
   - `count`
   - `metadata`
   - `results`
-- Analyze metadata includes module status, applied filters, scope details, and run limitations.
-- With `--root-prefix`, Tenax rewrites artifact paths into target-root paths such as `/etc/...` while preserving host-side paths in metadata where applicable.
+- In JSON mode, the terminal prints only the displayed slice, then prints `Saved full analyze output to:` and, if applicable, `Saved additional analyze output to:`.
+- Analyze metadata includes summary counts, module status, applied filters, scope details, and limitations.
+- With `--root-prefix`, finding paths stay target-root-relative, such as `/etc/...`, while root context is recorded in metadata.
 - User-scoped modules enumerate users from the target root's `/etc/passwd` when available.
 
 ### Analyze Examples
 
-Default analyze of the live host:
+Basic analyze of the live host:
 
 ```bash
 tenax analyze
+```
+
+Show only the top 10 findings in the terminal:
+
+```bash
+tenax analyze --top 10
 ```
 
 Filter to critical and high results, sorted by severity:
 
 ```bash
 tenax analyze --severity high --sort severity
-```
-
-Show all filtered findings in the terminal by raising the display cap:
-
-```bash
-tenax analyze --top 200
 ```
 
 Focus on specific modules:
@@ -217,7 +220,13 @@ Limit to paths containing `.ssh`:
 tenax analyze --path-contains .ssh
 ```
 
-Analyze an offline image root and save JSON:
+Show per-module execution details while analyzing:
+
+```bash
+tenax analyze --verbose
+```
+
+Analyze an offline image root and save JSON to an additional explicit file:
 
 ```bash
 tenax analyze \
@@ -228,12 +237,6 @@ tenax analyze \
   --top 25 \
   --format json \
   --output /cases/analysis/tenax-image-analyze.json
-```
-
-Print per-module execution details:
-
-```bash
-tenax analyze --verbose
 ```
 
 Typical verbose line shape:
@@ -259,48 +262,109 @@ For `path` and `source`, Tenax sorts in ascending order.
 
 ### Analyze Output Example
 
-Representative terminal text output:
+Representative terminal text output for `tenax analyze --source ssh,systemd --severity high --top 2 --sort severity`:
 
 ```text
-=== TENAX ANALYZE RESULTS ===
-Findings shown in terminal: 2 of 3
-Full findings saved: 3
-Modules: 2/2 succeeded
+══════════════════════════════════════════════════════
+              TENAX PERSISTENCE ANALYSIS
+══════════════════════════════════════════════════════
+🔥 CRITICAL FINDINGS: 1
+HIGH FINDINGS: 1
+MEDIUM FINDINGS: 0
+LOW FINDINGS: 0
+INFO FINDINGS: 0
+Displayed: 2 of 3
+Saved Findings: 3
+Modules Succeeded: 2/2
 Display truncated for terminal readability; saved artifact contains the full filtered result set.
+
 Limitations:
 - Only the selected analyzer modules were executed.
 - Analysis targeted mounted root /mnt/forensics/image.
 - User-scoped modules enumerated 3 local user home paths.
 - Unreadable target paths may reduce observable findings; only accessible artifacts can be analyzed.
 
-CRITICAL (1)
-TX-SYSTEMD-8A15F2C1 CRITICAL systemd /etc/systemd/system/dbus-update.service
-  score=115 rule=TX-RULE-SYSTEMD-SERVICE_DEFINITION
-  reason=systemd service executes payload from a temporary path
-  tags=root-execution, scheduled-start, service-definition, system-scope, systemd, systemd-unit, temp-path
-  preview=ExecStart=/tmp/.cache/dbus-update --daemon
+🔥 CRITICAL FINDINGS: 1
+┌──────────────────────────┐
+│ SYSTEMD (SYSTEM-LEVEL)   │
+└──────────────────────────┘
 
-HIGH (1)
-TX-SSH-4A32A7E0 HIGH ssh /root/.ssh/authorized_keys
-  score=74 rule=TX-RULE-SSH-SSH_PERSISTENCE
-  reason=authorized_keys entry uses command= restriction/execution
-  tags=credential-surface, ssh, ssh-persistence, user-persistence, user-scope
-  preview=command="/usr/local/bin/keywrap" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+[CRITICAL] SYSTEMD TEMPORARY-PATH EXECUTION
+ID: TX-SYSTEMD-8A15F2C1
+User: system
+File: /etc/systemd/system/dbus-update.service
+
+Score: 115
+Rule: TX-RULE-SYSTEMD-TEMP_PATH
+Reason: Systemd service executes payload from a temporary path
+
+Exec:
+  line 7 -> ExecStart=/tmp/.cache/dbus-update --daemon
+
+Tags: root-execution, scheduled-start, service-definition, system-scope, systemd, systemd-unit, temp-path
+------------------------------------------------------
+
+HIGH FINDINGS: 1
+┌──────────────────────────┐
+│ SSH (USER PERSISTENCE)   │
+└──────────────────────────┘
+
+[HIGH] SSH SUSPICIOUS PERSISTENCE ARTIFACT
+ID: TX-SSH-4A32A7E0
+User: root
+File: /root/.ssh/authorized_keys
+
+Score: 74
+Rule: TX-RULE-SSH-SSH_PERSISTENCE
+Reason: authorized_keys entry uses command= restriction/execution
+
+Exec:
+  command="/usr/local/bin/keywrap" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+
+Tags: credential-surface, ssh, ssh-persistence, user-persistence, user-scope
+------------------------------------------------------
+
+══════════════════════════════════════════════════════
+Output saved:
+/path/to/repo/output/analyze_20260401_101530.txt
+══════════════════════════════════════════════════════
 ```
 
-Expected saved-path message:
+If `--output /cases/analysis/tenax-analyze.txt` is also provided in text mode, the footer lists both paths:
 
 ```text
-Saved full analyze output to: /path/to/repo/output/analyze_20260327_104512.txt
+══════════════════════════════════════════════════════
+Output saved:
+/path/to/repo/output/analyze_20260401_101530.txt
+/cases/analysis/tenax-analyze.txt
+══════════════════════════════════════════════════════
+```
+
+Representative terminal behavior in JSON mode:
+
+```text
+{
+  "mode": "analyze",
+  "count": 2,
+  "metadata": {
+    "...": "terminal metadata reflects the displayed slice"
+  },
+  "results": [
+    {
+      "...": "only the displayed findings appear here"
+    }
+  ]
+}
+Saved full analyze output to: /path/to/repo/output/analyze_20260401_101530.json
 Saved additional analyze output to: /cases/analysis/tenax-image-analyze.json
 ```
 
-Representative JSON structure:
+Representative saved JSON artifact structure:
 
 ```json
 {
   "mode": "analyze",
-  "count": 2,
+  "count": 3,
   "metadata": {
     "schema_version": "1.1",
     "summary": {
@@ -310,7 +374,14 @@ Representative JSON structure:
       "filtered_finding_count": 3,
       "displayed_finding_count": 2,
       "saved_finding_count": 3,
-      "display_truncated": true
+      "display_truncated": true,
+      "severity_counts": {
+        "CRITICAL": 1,
+        "HIGH": 2,
+        "MEDIUM": 0,
+        "LOW": 0,
+        "INFO": 0
+      }
     },
     "filters": {
       "severity": "high",
@@ -334,15 +405,39 @@ Representative JSON structure:
   "results": [
     {
       "finding_id": "TX-SYSTEMD-8A15F2C1",
-      "rule_id": "TX-RULE-SYSTEMD-SERVICE_DEFINITION",
+      "rule_id": "TX-RULE-SYSTEMD-TEMP_PATH",
+      "rule_name": "systemd temporary-path execution",
       "severity": "CRITICAL",
       "score": 115,
       "source": "systemd",
-      "path": "/etc/systemd/system/dbus-update.service"
+      "source_module": "systemd",
+      "path": "/etc/systemd/system/dbus-update.service",
+      "scope": "system",
+      "tags": [
+        "root-execution",
+        "scheduled-start",
+        "service-definition",
+        "system-scope",
+        "systemd",
+        "systemd-unit",
+        "temp-path"
+      ],
+      "preview": "line 7: ExecStart=/tmp/.cache/dbus-update --daemon",
+      "paths": [
+        "/etc/systemd/system/dbus-update.service"
+      ]
     }
   ]
 }
 ```
+
+Terminal versus saved output:
+
+- Terminal text output shows at most `--top` findings, but the summary still shows `Displayed: X of Y` and `Saved Findings: Y`.
+- The saved artifact always contains the full filtered result set after dedupe, sorting, and filters.
+- `--quiet` removes the text-mode summary and `Limitations:` section, but findings and the `Output saved:` footer still print.
+- Module failures are not shown inline with findings. They are reflected in `Module Failures: N` and in the `Limitations:` list when failures occurred.
+- If no findings match the current filters, text output prints `No findings matched the current filters.` and still includes the saved output footer.
 
 ## Collect Command
 
