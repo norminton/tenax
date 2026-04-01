@@ -222,13 +222,17 @@ def test_rc_init_detects_direct_user_controlled_payload_path_without_wrapper(tmp
     assert any("user-controlled" in reason.lower() for reason in finding["reasons"])
 
 
-def test_rc_init_ignores_temp_directory_variable_assignment_without_execution(tmp_path: Path) -> None:
+def test_rc_init_ignores_temp_directory_variable_assignment_without_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     artifact = tmp_path / "x11-common"
     artifact.write_text(
         "#!/bin/sh\n"
         "DIR=\"/tmp/$1\"\n",
         encoding="utf-8",
     )
+    _set_root_owned_stat(monkeypatch, rc_init, artifact)
 
     assert rc_init._analyze_file(artifact) is None
 
