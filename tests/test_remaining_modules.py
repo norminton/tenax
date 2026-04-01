@@ -232,6 +232,7 @@ def test_rc_init_ignores_temp_directory_variable_assignment_without_execution(
         "DIR=\"/tmp/$1\"\n",
         encoding="utf-8",
     )
+    artifact.chmod(0o755)
     _set_root_owned_stat(monkeypatch, rc_init, artifact)
 
     assert rc_init._analyze_file(artifact) is None
